@@ -1,5 +1,6 @@
 import { mkdir, copyFile, cp, chmod } from "node:fs/promises";
 import { join } from "node:path";
+import { RELEASE_VERSION } from "@cross-harness-comms/protocol";
 
 // The target is chosen at build time. No runtime operating system selection.
 const target = process.argv[2] ?? "bun-darwin-arm64";
@@ -16,7 +17,7 @@ for (const harness of ["pi", "claude", "codex"]) {
   if (harness === "pi") {
     const build = await Bun.build({ entrypoints: ["adapters/pi/src/index.ts"], outdir: `${output}/src`, target: "node", format: "esm" });
     if (!build.success) throw new AggregateError(build.logs, "Pi build failed");
-    await Bun.write(`${output}/package.json`, JSON.stringify({ name: "@cross-harness-comms/pi", version: "0.1.1", type: "module",
+    await Bun.write(`${output}/package.json`, JSON.stringify({ name: "@cross-harness-comms/pi", version: RELEASE_VERSION, type: "module",
       pi: { extensions: ["./src/index.js"] } }, null, 2) + "\n");
   } else if (harness === "claude") {
     await cp("adapters/claude/.claude-plugin", `${output}/.claude-plugin`, { recursive: true });

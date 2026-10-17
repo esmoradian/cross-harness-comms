@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import { readPackets, writePacket, messageId } from "@cross-harness-comms/client";
-import { DEFAULT_POLICY, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
+import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
   type Agent, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
 
 export interface Core {
@@ -279,7 +279,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         setTimeout(options.onShutdown, 20);
         return { ok: true };
       }
-      case "status": return { version: "0.1.1", protocol: policy.latest };
+      case "status": return { version: RELEASE_VERSION, protocol: policy.latest };
       default: throw failure("METHOD_NOT_FOUND", "Method not found", -32601);
     }
   };
