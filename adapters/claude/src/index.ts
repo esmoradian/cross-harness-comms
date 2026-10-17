@@ -22,6 +22,8 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
   const received = new Set<string>();
   // Messages the native inbox route already delivered, so their fallback copies are only acknowledged.
   const seenNatively = new Set<string>();
+  // The address of each comms row the last ListAgents showed, by name, so the model can send to the name.
+  const listed = new Map<string, string>();
   const sends = new Map<string, Promise<unknown>>();
   let disconnect: (() => Promise<void>) | undefined;
   const close = async () => {
@@ -45,7 +47,7 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     const run = generation;
     sessionId = await $.session.id();
     if (sessionId === previousSession) token = previousToken;
-    else { pendingReplies.clear(); received.clear(); seenNatively.clear(); sends.clear(); }
+    else { pendingReplies.clear(); received.clear(); seenNatively.clear(); listed.clear(); sends.clear(); }
     const session = { harness: "claude", session_key: sessionId, cwd: await $.session.cwd(), host: options.host };
     // Mods get no CLAUDE_PLUGIN_ROOT; $.plugin.root is the plugin's directory.
     if (options.binary === "comms") options.binary = `${$.plugin.root}/bin/comms`;
@@ -150,9 +152,11 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
       return result;
     };
     if (event.tool === "SendMessage") {
-      if (typeof event.to !== "string" || !event.to.startsWith("comms:")) return next(event);
+      const named = typeof event.to === "string" ? listed.get(event.to) : undefined;
+      if (named && !named.startsWith("comms:")) return next({ ...event, to: named });
+      const address = named ?? event.to;
+      if (typeof address !== "string" || !address.startsWith("comms:")) return next(event);
       if (!token || await $.session.id() !== sessionId) return { deny: "comms session is not connected" };
-      const address = event.to;
       const run = generation;
       // Serialize logical sends to one address, so concurrent replies consume
       // different pending messages. New tool calls still mint distinct IDs.
@@ -196,7 +200,9 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     // so when it is on, Claude peers stay native and only other harnesses are added.
     const header = /^Peer sessions \((\d+)\):/m;
     const nativePeers = header.test(original.listing);
-    const extra = result.agents.filter(a => a.harness !== "claude" || (!nativePeers && a.session_key !== sessionId))
+    const shown = result.agents.filter(a => a.harness !== "claude" || (!nativePeers && a.session_key !== sessionId));
+    for (const a of shown) listed.set(a.name, a.claude_address ?? `comms:${a.name}`);
+    const extra = shown
       // Under the native header, rows match native peers; on the native route, Claude
       // sends to a reply socket with its own SendMessage.
       .map(a => nativePeers
