@@ -224,8 +224,10 @@ test("native claude: ListAgents lists other harnesses by their uds address when 
     fake.nativeListing = peerSessions;
     const result = await claude.list() as { result: { listing: string } };
     const listing = result.result.listing;
-    expect(listing.startsWith(peerSessions)).toBe(true);
-    const added = listing.slice(peerSessions.length);
+    // The native rows stay unchanged, and the header counts the added rows too.
+    const native = peerSessions.replace("Peer sessions (1):", "Peer sessions (3):");
+    expect(listing.startsWith(native)).toBe(true);
+    const added = listing.slice(native.length);
     const token = attachToken(fake);
     for (const agent of [codex, pi]) {
       const address = await claudeAddress(rig, token, agent.agent.id);
@@ -255,8 +257,9 @@ test("native claude: ListAgents goes back to comms addresses once the native rou
     await eventually(claude.incoming, texts => expect(texts).toHaveLength(1));
     fake.nativeListing = peerSessions;
     const listing = (await claude.list() as { result: { listing: string } }).result.listing;
-    expect(listing.startsWith(peerSessions)).toBe(true);
-    expect(listing).toContain(`comms:${codex.agent.name}`);
+    expect(listing.startsWith(peerSessions.replace("Peer sessions (1):", "Peer sessions (2):"))).toBe(true);
+    // Indented like the native rows it joins.
+    expect(listing.split("\n").find(line => line.includes(`comms:${codex.agent.name}`))).toStartWith("  ");
     expect(listing).not.toContain("uds:");
   }, undefined, { nativeAckMs: 50 });
 });
