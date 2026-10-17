@@ -121,7 +121,11 @@ test("invariant 8: Claude passes the attach token to send and ack on stdin only"
       expect(JSON.stringify(command.argv)).not.toContain(token);
       expect(JSON.stringify(command.init?.env ?? {})).not.toContain(token);
     }
-    expect(JSON.stringify(fake.spawns)).not.toContain(token);
+    // Reconnects may carry the held token in spawn.input, which is the child's stdin.
+    for (const spawn of fake.spawns) {
+      expect(JSON.stringify(spawn.argv)).not.toContain(token);
+      expect(JSON.stringify(spawn.env ?? {})).not.toContain(token);
+    }
     const otherOutput = fake.processOutput.filter(p => p.command !== "attach" || p.stream === "stderr");
     expect(JSON.stringify(otherOutput)).not.toContain(token);
     expect(JSON.stringify(await claude.list())).not.toContain(token);

@@ -37,6 +37,6 @@ export class FakePi implements PiAPI {
     this.calls.push({ method: "tool.execute", args: [name, args] });
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`Pi tool not registered: ${name}`);
-    return tool.execute("fake-tool-call", args, undefined, undefined, this.context);
+    return tool.execute(`fake-tool-call-${this.calls.length}`, args, undefined, undefined, this.context);
   }
 }

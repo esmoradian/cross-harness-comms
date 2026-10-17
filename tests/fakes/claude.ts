@@ -12,11 +12,18 @@ export class FakeClaude {
   readonly spawns: ProcessSpawnRequest[] = [];
   readonly nativeCalls: ToolEvent[] = [];
   readonly processOutput: { stream: string; text: string; command: string }[] = [];
-  readonly api: ClaudeAPI;
+  readonly api: ClaudeAPI & { clock: {
+    now(): Promise<number>;
+    sleep(ms: number, options?: { signal?: AbortSignal }): Promise<void>;
+    after(delay: number, callback: () => void | Promise<void>): { cancel(): void };
+  } };
   readonly on: ClaudeOn;
   acceptGate: Promise<void> = Promise.resolve();
   nativeResult: ToolResult = { result: "native message accepted" };
   nativeListing = "Native Claude peers\nworker [native-ref]";
+  loseNextSendReceipt = false;
+  readonly backgroundErrors: unknown[] = [];
+  private timers: { delay: number; callback: () => void | Promise<void>; cancelled: boolean }[] = [];
   private toolHandlers: ToolHandler[] = [];
   private startHandlers: StartHandler[] = [];
   private aborters: AbortController[] = [];
@@ -29,6 +36,20 @@ export class FakeClaude {
       else throw new Error(`Unsupported fake hook: ${name}`);
     }) as ClaudeOn;
     this.api = {
+      clock: {
+        now: async () => { this.calls.push({ method: "clock.now", args: [] }); return Date.now(); },
+        sleep: async (ms, options) => {
+          this.calls.push({ method: "clock.sleep", args: [ms, options] });
+          if (options?.signal?.aborted) throw options.signal.reason;
+        },
+        after: (delay, callback) => {
+          this.calls.push({ method: "clock.after", args: [delay, callback] });
+          const timer = { delay, callback, cancelled: false };
+          if (delay === 0) queueMicrotask(() => this.fire(timer));
+          else this.timers.push(timer);
+          return { cancel: () => { timer.cancelled = true; } };
+        },
+      },
       session: {
         id: async () => { this.calls.push({ method: "session.id", args: [] }); return sessionId; },
         cwd: async () => { this.calls.push({ method: "session.cwd", args: [] }); return cwd; },
@@ -51,6 +72,10 @@ export class FakeClaude {
             stdout: text => { stdout += text; this.processOutput.push({ stream: "stdout", text, command: argv[1]! }); },
             stderr: text => { stderr += text; this.processOutput.push({ stream: "stderr", text, command: argv[1]! }); },
           }, runtime);
+          if (argv[1] === "send" && exitCode === 0 && this.loseNextSendReceipt) {
+            this.loseNextSendReceipt = false;
+            return { exitCode: 1, stdout: "", stderr: "DISCONNECTED: send receipt lost", isStdoutTruncated: false, isStderrTruncated: false };
+          }
           return { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false };
         },
         spawn: request => {
@@ -113,7 +138,16 @@ export class FakeClaude {
     };
     return dispatch(0, event);
   }
-  close() { for (const abort of this.aborters) abort.abort(); }
+  private fire(timer: { callback: () => void | Promise<void>; cancelled: boolean }) {
+    if (!timer.cancelled) void Promise.resolve().then(timer.callback).catch(error => this.backgroundErrors.push(error));
+  }
+  runScheduled() {
+    for (const timer of this.timers.splice(0)) this.fire(timer);
+  }
+  close() {
+    for (const timer of this.timers) timer.cancelled = true;
+    for (const abort of this.aborters) abort.abort();
+  }
 }
 
 async function* textInput(text?: string) { if (text !== undefined) yield text; }

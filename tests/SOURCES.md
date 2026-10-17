@@ -2,7 +2,7 @@
 
 These unit fakes reproduce only the host APIs the adapters use.
 They record calls and delegate transport to product code; they do not route messages or maintain mailboxes themselves.
-The product exports initially throw `new Error("not implemented")`.
+The first-pass scaffold used throwing exports; the current suite also specifies the first prototype's review fixes.
 
 ## Pi
 
@@ -36,6 +36,16 @@ The older temporary declaration snapshot lacks `process.spawn` and is not the bi
 - `$.process.run(argv, { stdin })` accepts stdin and returns `exitCode`, `stdout`, `stderr`, and two truncation flags.
 - `$.process.spawn({ argv, input })` uses `input`, not `stdin`, and returns an async generator with a `.result` promise.
 - Spawn chunks are `{ stream, text }`; they are not necessarily complete protocol lines.
+- Generated globals include `crypto.getRandomValues`, `crypto.randomUUID`, and `performance.now`.
+- `$.clock.now()` returns `Promise<number>` with epoch milliseconds; `$.clock.after(delay, callback)` returns a cancellation handle.
+
+On 2026-10-17 the installed Claude Code 2.1.289 validator accepted isolated mods using `crypto.getRandomValues(new Uint8Array(16))`, `crypto.randomUUID()`, and `await $.clock.now()`.
+Separate probes using `Date.now()`, `Math.random()`, and `performance.now()` also passed validation.
+These checks establish validator acceptance, not execution in a real session.
+Prefer cryptographic randomness for UUID entropy; `crypto.randomUUID()` alone yields UUIDv4, and `performance.now()` is not an epoch timestamp.
+The fixed mod must generate UUIDv7 before invoking the CLI, rather than ask the CLI to generate it.
+The fake exposes the source-checked host clock and uses Bun's available Web Crypto globals; it does not invent a `$.crypto` namespace.
+Delayed fake-clock callbacks advance explicitly in reconnect tests so they do not depend on a 250 ms wall-clock delay.
 
 The fake intentionally splits output into seven-character chunks.
 Both process methods call the actual `runCli` export in process, including `ensure`, `attach`, `send`, and `ack`.
@@ -64,15 +74,29 @@ The fake models that accepted design assumption without claiming the launch topo
 ## Narrow choices for the first specification
 
 - Pi and Codex tool names are `comms_send` and `comms_list`.
-- Claude replies to a marked comms address use `message: 'comms-reply:' + JSON.stringify({ text, reply_to })` because its native schema has no `reply_to` argument.
-  Plain messages remain plain text, and unmarked recipients are never parsed or intercepted.
-  The adapter must explain this convention through the host's tool-description extension when implemented.
+- Claude sends native `message` text literally, including `comms-reply:` prefixes.
+  The adapter selects the most recent received message from that exact address that has not yet been replied to.
+  A successful reply consumes that pending message once; older pending messages remain eligible, and state is separate per receiving session.
+  Unmarked recipients pass through untouched.
+- Wrapper reply instructions mention setting `reply_to` only if the send tool has that field.
 - Claude's native listing remains text; this suite tests appending comms peers but does not fabricate native session IDs for deduplication.
 - Formatting lives in the I/O-free protocol package so Claude can share it without importing Node.
 - `hello` without `session` negotiates only and creates no agent or presence.
   It lets one-shot CLI connections authenticate `send` or `ack` with the live attachment's token without creating a second session attachment.
 - `attach` reads `HelloParams` from stdin and writes JSON-RPC response and notification lines.
-  `send` and `ack` read their protocol parameter objects from stdin and write a protocol response, without echoing the token.
+  `send` and `ack` read their protocol parameter objects from stdin and write result JSON, without echoing the token.
+- A reconnect carries its held credential as a top-level `hello.token`, including `spawn.input` for Claude's attachment.
+  This is stdin, not an argument or environment variable.
+- Before refusing an uncredentialed live-session claim, the core sends a correlated JSON-RPC `ping` request; a peer answers with the same request ID and an empty result object.
+  The CLI attachment must handle this for Claude because its stdin is closed after initial registration.
+- The core option `pingTimeoutMs` is passed structurally by the test rig until Part 2 declares and implements it.
+  The stale-connection test uses zero; responsive-peer tests use 100 ms.
+- The persisted credential column is named `agents.token_hash`; tests leave the hash algorithm unspecified and reject plaintext in both the database and WAL.
+  The handoff explicitly allows wrong-token claims while offline, a row omitted from ADR-013's table, so tests cover rotation in that case too.
+- One lost send receipt within a logical tool invocation is retried with the original UUIDv7 and unchanged content.
+  Separate invocations, even with identical text, receive distinct IDs.
+  Pi and Codex tests drop a committed core receipt and close the in-memory transport; Claude tests lose successful subprocess output after the actual CLI has committed the send.
+  Neither fault injector implements routing, storage, or retry logic.
 - JSON-RPC application failures carry a symbolic `error.data.code`; the suite does not allocate numeric application error codes.
   Missing/invalid credentials use `INVALID_TOKEN`, and acknowledging another recipient's message uses `FORBIDDEN`.
 - Unknown identity fields cannot override native session identity or token ownership.

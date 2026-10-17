@@ -25,7 +25,7 @@ export class Queue<T> {
   }
 }
 
-export function memoryPair(): [Duplex, Duplex] {
+export function memoryPair(filterServerBytes?: (chunk: Buffer) => string): [Duplex, Duplex] {
   const a = new Duplex({
     allowHalfOpen: false,
     read() {},
@@ -36,7 +36,11 @@ export function memoryPair(): [Duplex, Duplex] {
   const b = new Duplex({
     allowHalfOpen: false,
     read() {},
-    write(chunk, _encoding, done) { a.push(chunk); done(); },
+    write(chunk, _encoding, done) {
+      const output = filterServerBytes ? filterServerBytes(chunk) : chunk;
+      if (output.length) a.push(output);
+      done();
+    },
     final(done) { a.push(null); done(); },
     destroy(error, done) { a.push(null); done(error); },
   });
@@ -60,6 +64,7 @@ export const uuidV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 
 // A wire driver, not a fake core/client. It only frames requests and correlates responses.
 export class Peer {
+  answerPings = true;
   readonly received: WirePacket[] = [];
   readonly deliveries = new Queue<Delivery>();
   private sequence = 0;
@@ -75,6 +80,9 @@ export class Peer {
         this.buffer = this.buffer.slice(newline + 1);
         this.received.push(packet);
         if ("method" in packet) {
+          if (packet.method === "ping" && packet.id !== undefined && this.answerPings) {
+            this.stream.write(JSON.stringify({ jsonrpc: "2.0", id: packet.id, result: {} }) + "\n");
+          }
           if (packet.method === "deliver") this.deliveries.push(packet.params as Delivery);
         } else if (typeof packet.id === "number") {
           const request = this.pending.get(packet.id);
@@ -95,8 +103,9 @@ export class Peer {
   async request<M extends RequestMethod>(method: M, params: MethodTable[M]["params"]): Promise<MethodTable[M]["result"]> {
     return await this.raw(method, params) as MethodTable[M]["result"];
   }
-  async register(session: NonNullable<HelloParams["session"]>, versions = { min: 1, max: 1 }) {
-    const hello = await this.request("hello", { versions, session });
+  async register(session: NonNullable<HelloParams["session"]>, versions = { min: 1, max: 1 }, token?: string) {
+    const params = { versions, session, ...(token === undefined ? {} : { token }) };
+    const hello = await this.request("hello", params);
     expect(hello.agent).toBeDefined();
     expect(hello.token).toBeString();
     return hello as HelloResult & { agent: NonNullable<HelloResult["agent"]>; token: string };

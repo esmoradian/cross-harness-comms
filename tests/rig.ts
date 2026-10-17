@@ -3,11 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { expect } from "bun:test";
 import { createCore, type Core } from "@cross-harness-comms/core";
 import type { CliRuntime } from "@cross-harness-comms/core/cli";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
-import type { Agent, Harness, Message, SessionRegistration, VersionPolicy } from "@cross-harness-comms/protocol";
+import type { Agent, Harness, Message, SessionRegistration, VersionPolicy, WirePacket } from "@cross-harness-comms/protocol";
 import { registerPi } from "../adapters/pi/src/index.ts";
 import { registerClaude } from "../adapters/claude/src/index.ts";
 import { createCodexAdapter } from "../adapters/codex/src/index.ts";
@@ -28,6 +29,9 @@ export interface HarnessSession {
 }
 
 export class Rig {
+  readonly traffic: { connection: number; direction: "to-core" | "from-core"; packet: WirePacket }[] = [];
+  readonly links: { client: Duplex; server: Duplex }[] = [];
+  dropNextSendReceipt = false;
   readonly directory = mkdtempSync(join(tmpdir(), "comms-unit-"));
   readonly databasePath = join(this.directory, "comms.sqlite");
   readonly notices: string[] = [];
@@ -38,13 +42,43 @@ export class Rig {
   private core: Core | undefined;
   private observer: Peer | undefined;
 
-  constructor(readonly protocol?: VersionPolicy) {}
+  // Anticipatory option passed structurally; Part 2 adds it to the core's public type and implements it.
+  constructor(readonly protocol?: VersionPolicy, readonly coreOptions: { pingTimeoutMs?: number } = {}) {}
   open() {
-    this.core = createCore({ databasePath: this.databasePath, ...(this.protocol ? { protocol: this.protocol } : {}) });
+    this.core = createCore({ databasePath: this.databasePath, ...this.coreOptions, ...(this.protocol ? { protocol: this.protocol } : {}) });
   }
   connect = async (_address = "memory://comms"): Promise<Duplex> => {
     if (!this.core) throw new Error("Fixture core not started");
-    const [client, server] = memoryPair();
+    const connection = this.links.length;
+    const requests = new Map<string | number, string>();
+    const incoming = new StringDecoder("utf8"), outgoing = new StringDecoder("utf8");
+    let clientBuffer = "", serverBuffer = "";
+    const [client, server] = memoryPair(chunk => {
+      serverBuffer += outgoing.write(chunk);
+      let forwarded = "", end: number;
+      while ((end = serverBuffer.indexOf("\n")) >= 0) {
+        const line = serverBuffer.slice(0, end);
+        serverBuffer = serverBuffer.slice(end + 1);
+        const packet = JSON.parse(line) as WirePacket;
+        this.traffic.push({ connection, direction: "from-core", packet });
+        if (this.dropNextSendReceipt && "result" in packet && requests.get(packet.id) === "send") {
+          this.dropNextSendReceipt = false;
+          queueMicrotask(() => { client.destroy(); server.destroy(); });
+        } else forwarded += line + "\n";
+      }
+      return forwarded;
+    });
+    server.on("data", (chunk: Buffer | string) => {
+      clientBuffer += typeof chunk === "string" ? chunk : incoming.write(chunk);
+      let end: number;
+      while ((end = clientBuffer.indexOf("\n")) >= 0) {
+        const packet = JSON.parse(clientBuffer.slice(0, end)) as WirePacket;
+        clientBuffer = clientBuffer.slice(end + 1);
+        this.traffic.push({ connection, direction: "to-core", packet });
+        if ("method" in packet && packet.id !== undefined) requests.set(packet.id, packet.method);
+      }
+    });
+    this.links.push({ client, server });
     this.streams.push(client, server);
     this.core.attach(server);
     return client;
@@ -105,7 +139,7 @@ export class Rig {
       this.handles.push(handle);
       await claude.start();
       send = (to, text, reply_to, extra) => claude.tool({ tool: "SendMessage", tool_use_id: uuid(), to,
-        message: reply_to ? `comms-reply:${JSON.stringify({ text, reply_to })}` : text, ...extra });
+        message: text, ...extra });
       list = () => claude.tool({ tool: "ListAgents", tool_use_id: uuid() });
       incoming = () => claude.incoming.map(call => call.text);
     } else {
@@ -147,8 +181,8 @@ export class Rig {
   }
 }
 
-export async function withRig(run: (rig: Rig) => Promise<void>, protocol?: VersionPolicy) {
-  const rig = new Rig(protocol);
+export async function withRig(run: (rig: Rig) => Promise<void>, protocol?: VersionPolicy, coreOptions?: { pingTimeoutMs?: number }) {
+  const rig = new Rig(protocol, coreOptions);
   try { rig.open(); await run(rig); }
   finally { await rig.close(); }
 }
