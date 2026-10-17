@@ -33,11 +33,12 @@ export function createUnixPlatform(): Platform {
       await unlink(address).catch(error => { if (error.code !== "ENOENT") throw error; });
     },
     async restrictAccess() { await chmod(address, 0o600); },
-    async parentExecutable() {
+    codexHome: () => process.env.CODEX_HOME || join(homedir(), ".codex"),
+    async processExecutable(pid) {
       // Linux exposes /proc; macOS and other Unix systems answer through ps.
-      const fromProc = await readlink(`/proc/${process.ppid}/exe`).catch(() => undefined);
+      const fromProc = await readlink(`/proc/${pid}/exe`).catch(() => undefined);
       if (fromProc) return fromProc;
-      const ps = Bun.spawnSync(["ps", "-o", "comm=", "-p", String(process.ppid)]);
+      const ps = Bun.spawnSync(["ps", "-o", "comm=", "-p", String(pid)]);
       const path = ps.success ? ps.stdout.toString().trim() : "";
       return path.startsWith("/") ? path : undefined;
     },

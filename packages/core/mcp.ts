@@ -16,7 +16,7 @@ export async function codexHook(io: CliIO, runtime: CliRuntime): Promise<number>
     else await client.request("codex_session_start", {
       session: { harness: "codex", session_key: input.session_id, host: hostname(), cwd: input.cwd },
       // The hook's parent is the Codex that owns this thread, so `codex queue` reaches the same install.
-      executable: await runtime.platform.parentExecutable() ?? "codex",
+      executable: await runtime.platform.processExecutable(process.ppid) ?? "codex",
     });
     return 0;
   } finally { await client.close(); }

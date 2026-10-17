@@ -2,6 +2,7 @@ import type { Duplex } from "node:stream";
 import { Database } from "bun:sqlite";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
+import { hostname } from "node:os";
 import { readPackets, writePacket, messageId } from "@cross-harness-comms/client";
 import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
   type Agent, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
@@ -36,6 +37,9 @@ function registration(value: unknown): SessionRegistration {
     host: string(fields.host), cwd: string(fields.cwd) };
 }
 
+// What Codex's app-server daemon reports: the threads it has loaded, and its own executable.
+export interface CodexSnapshot { executable: string; threads: { id: string; cwd: string }[] }
+
 export type Run = (argv: readonly string[]) => Promise<{ exitCode: number; stderr?: string }>;
 
 // ponytail: no timeout on `codex queue`; a hung command stalls only that thread's deliveries.
@@ -44,7 +48,8 @@ const spawn: Run = async argv => {
   return { exitCode: await child.exited, stderr: await new Response(child.stderr).text() };
 };
 
-export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number; run?: Run }): Core {
+export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number; run?: Run;
+  codexDaemon?: () => Promise<CodexSnapshot | undefined>; codexPollMs?: number }): Core {
   const policy = options.protocol ?? DEFAULT_POLICY;
   const db = new Database(options.databasePath, { create: true });
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
@@ -160,6 +165,18 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null);
     return { ...session, id, name, last_seen: now, online: true };
   };
+  const codexStart = (session: SessionRegistration, executable: string): Agent => {
+    const agent = upsert(session);
+    db.query("INSERT OR REPLACE INTO codex_threads (agent, executable) VALUES (?, ?)").run(agent.id, executable);
+    for (const message of pending(agent.id)) deliverToCodex(message);
+    return agent;
+  };
+  const codexEnd = (thread: string) => {
+    const agent = agents().find(a => a.harness === "codex" && a.session_key === thread);
+    if (!agent) return;
+    db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent.id);
+    db.query("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), agent.id);
+  };
   const pending = (agent: string) => db.query("SELECT * FROM messages WHERE recipient = ? AND state != 'acked' ORDER BY rowid").all(agent) as Message[];
   const register = async (input: SessionRegistration, connection: Connection, suppliedToken: unknown): Promise<Agent> => {
     const session = registration(input);
@@ -207,21 +224,11 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     if (connection.version === undefined) throw failure("HELLO_REQUIRED");
     switch (method) {
       case "codex_session_start": {
-        const session = registration(params.session), executable = string(params.executable);
+        const session = registration(params.session);
         if (session.harness !== "codex") throw failure("INVALID_PARAMS", "Not a Codex session", -32602);
-        const agent = upsert(session);
-        db.query("INSERT OR REPLACE INTO codex_threads (agent, executable) VALUES (?, ?)").run(agent.id, executable);
-        for (const message of pending(agent.id)) deliverToCodex(message);
-        return { agent };
+        return { agent: codexStart(session, string(params.executable)) };
       }
-      case "codex_session_end": {
-        const agent = agents().find(a => a.harness === "codex" && a.session_key === string(params.session_key));
-        if (agent) {
-          db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent.id);
-          db.query("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), agent.id);
-        }
-        return { ok: true };
-      }
+      case "codex_session_end": codexEnd(string(params.session_key)); return { ok: true };
       case "list": return { agents: agents() };
       case "send": {
         const sender = params.codex_thread === undefined ? authenticated(params) : codexSender(string(params.codex_thread));
@@ -283,6 +290,27 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       default: throw failure("METHOD_NOT_FOUND", "Method not found", -32601);
     }
   };
+  // Interactive Codex threads load in a shared daemon before their first prompt fires
+  // SessionStart, so the core polls the daemon. It expires only threads it saw
+  // loaded; hook-registered threads of headless `codex exec` never appear there.
+  const daemonThreads = new Set<string>();
+  let codexTimer: ReturnType<typeof setTimeout> | undefined;
+  const pollCodex = async () => {
+    const snapshot = await options.codexDaemon!().catch(() => undefined);
+    if (closed) return;
+    if (snapshot) {
+      const online = codexOnline();
+      const loaded = new Set(snapshot.threads.map(thread => thread.id));
+      for (const thread of snapshot.threads) {
+        const agent = agents().find(a => a.harness === "codex" && a.session_key === thread.id);
+        if (!agent || !online.has(agent.id)) codexStart({ harness: "codex", session_key: thread.id, host: hostname(), cwd: thread.cwd }, snapshot.executable);
+        daemonThreads.add(thread.id);
+      }
+      for (const thread of daemonThreads) if (!loaded.has(thread)) { codexEnd(thread); daemonThreads.delete(thread); }
+    }
+    codexTimer = setTimeout(() => void pollCodex(), options.codexPollMs ?? 2000);
+  };
+  if (options.codexDaemon) void pollCodex();
   // Resume deliveries to Codex threads that were online when the core last stopped.
   for (const agent of codexOnline()) for (const message of pending(agent)) deliverToCodex(message);
   return {
@@ -329,6 +357,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     async close() {
       if (closed) return;
       closed = true;
+      clearTimeout(codexTimer);
       for (const connection of connections) { detach(connection); connection.stream.destroy(); }
       connections.clear(); live.clear(); db.close();
     },
