@@ -9,9 +9,19 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
-    "types": ["bun"],
+    "types": [
+      "bun"
+    ],
     "skipLibCheck": true
   },
-  "include": ["packages/**/*.ts", "adapters/**/*.ts", "tests/**/*.ts"],
-  "exclude": ["node_modules", "internal"]
+  "include": [
+    "packages/**/*.ts",
+    "adapters/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "internal"
+  ]
 }
