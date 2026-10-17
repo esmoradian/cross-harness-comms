@@ -168,12 +168,12 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     const native = await next(event);
     if ("deny" in native) return native;
     const result = await command("list") as { agents: Agent[] };
-    // Deduplicate only when a native entry actually exposes the exact session ID.
     const original = native.result as { listing?: unknown };
     if (!original || typeof original.listing !== "string") return native;
-    const listing = original.listing;
-    const extra = result.agents.filter(a => a.session_key !== sessionId || a.harness !== "claude")
-      .filter(a => a.harness !== "claude" || !listing.includes(a.session_key))
+    // Native peer messaging lists Claude peers by short refs rather than session IDs,
+    // so when it is on, Claude peers stay native and only other harnesses are added.
+    const nativePeers = /^Peer sessions \(\d+\):/m.test(original.listing);
+    const extra = result.agents.filter(a => a.harness !== "claude" || (!nativePeers && a.session_key !== sessionId))
       .map(a => `comms:${a.name} (${a.harness}, ${a.online ? "online" : "offline"}, ${a.cwd})`);
     if (!extra.length) return native;
     return { result: { ...original, listing: original.listing + "\n" + extra.join("\n") } };
