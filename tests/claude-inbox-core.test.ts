@@ -242,3 +242,37 @@ test("native core: a Claude sender's comms message to a native Claude session us
     expect(claude.inbox!.lines).toHaveLength(1);
   });
 });
+
+test("native core: a native ACK or fallback never resends a message already handed over as a deliver packet", async () => {
+  await withRig(async rig => {
+    const claude = await nativePeer(rig);
+    const codexPeer = await rig.peer();
+    const codex = await codexPeer.register(registration("codex"));
+    const other = await rig.peer();
+    const sender = await other.register(registration("claude"));
+    const sendCodex = async (body: string) => {
+      const id = uuid();
+      await codexPeer.request("send", { token: codex.token, id, to: `comms:${claude.agent.name}`, body });
+      return id;
+    };
+    const first = await sendCodex("Native first");
+    const line = await inboxLine(claude.inbox!, 0);
+    // Delivered as a packet and not yet acknowledged by the comms path.
+    const id = uuid();
+    await other.request("send", { token: sender.token, id, to: `comms:${claude.agent.name}`, body: "Claude to Claude through comms" });
+    await eventually(() => deliveries(claude.peer), list => expect(list.map(d => d.message.id)).toEqual([id]));
+    await sendCodex("Native second");
+
+    const ack = await cli(rig, "native-ack", { token: claude.token, from: line.from });
+    expect(JSON.parse(ack.stdout)).toEqual({ id: first });
+    await inboxLine(claude.inbox!, 1);
+    await settle();
+    expect(deliveries(claude.peer).map(d => d.message.id)).toEqual([id]);
+
+    // The second line is never acknowledged, so the fallback resends it, and only it.
+    const fallback = await eventually(() => deliveries(claude.peer), list => expect(list).toHaveLength(2));
+    expect(fallback[1]!.message.body).toBe("Native second");
+    await settle();
+    expect(deliveries(claude.peer).map(d => d.message.id).filter(m => m === id)).toHaveLength(1);
+  }, undefined, { nativeAckMs: 200 });
+});
