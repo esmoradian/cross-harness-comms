@@ -124,7 +124,7 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
   on("tool.call", async ($, event, next) => {
     const command = async (name: string, params?: unknown): Promise<unknown> => {
       const response = await $.process.run([options.binary, name], params === undefined ? {} : { stdin: JSON.stringify(params) + "\n" });
-      if (response.exitCode) throw new Error(response.stderr.trim() || `comms ${name} failed`);
+      if (response.exitCode) throw Object.assign(new Error(response.stderr.trim() || `comms ${name} failed`), { exitCode: response.exitCode });
       const result = JSON.parse(response.stdout) as { notice?: string };
       if (result.notice) {
         try { $.ui!.log(result.notice); } catch { /* Minimal embedding host has no UI. */ }
@@ -147,9 +147,11 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
         const params = { token, id, to: address, body: event.message, ...(reply_to ? { reply_to } : {}) };
         let result: SendResult;
         try { result = await command("send", params) as SendResult; }
-        catch {
+        catch (error) {
           // A failed subprocess may have committed before losing stdout.
-          // Retry once with the same ID, text, credentials, and correlation.
+          // Retry once with the same ID, text, credentials, and correlation,
+          // unless the core definitely rejected the send (exit 2).
+          if ((error as { exitCode?: number }).exitCode === 2) throw error;
           if (stopped || run !== generation) throw new Error("comms session changed");
           result = await command("send", params) as SendResult;
         }

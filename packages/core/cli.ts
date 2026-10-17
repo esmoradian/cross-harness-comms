@@ -123,6 +123,8 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
   } catch (error) {
     // Syntax errors can contain source text, including credentials. Do not print them.
     io.stderr((error instanceof SyntaxError ? "Invalid JSON input" : error instanceof Error ? error.message : "Command failed") + "\n");
-    return 1;
+    // Exit 2 means the core answered with a definite rejection, so retrying cannot help.
+    const code = (error as { data?: { code?: string } }).data?.code;
+    return code && code !== "DISCONNECTED" ? 2 : 1;
   }
 }
