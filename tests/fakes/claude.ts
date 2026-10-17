@@ -17,6 +17,7 @@ export class FakeClaude {
     sleep(ms: number, options?: { signal?: AbortSignal }): Promise<void>;
     after(delay: number, callback: () => void | Promise<void>): { cancel(): void };
   } };
+  static readonly pluginRoot = "/fake/plugins/cross-harness-comms";
   readonly on: ClaudeOn;
   acceptGate: Promise<void> = Promise.resolve();
   nativeResult: ToolResult = { result: "native message accepted" };
@@ -50,6 +51,8 @@ export class FakeClaude {
           return { cancel: () => { timer.cancelled = true; } };
         },
       },
+      // Installed-build types: $.plugin.root is the plugin's absolute directory.
+      plugin: { name: "cross-harness-comms", root: FakeClaude.pluginRoot },
       session: {
         id: async () => { this.calls.push({ method: "session.id", args: [] }); return sessionId; },
         cwd: async () => { this.calls.push({ method: "session.cwd", args: [] }); return cwd; },

@@ -143,3 +143,13 @@ test("invariant 10: a comms marker in message text does not intercept a native C
     expect(rig.rows()).toEqual([]);
   });
 });
+
+test("claude runs the binary bundled in its plugin directory, not one on PATH", async () => {
+  await withRig(async rig => {
+    const claude = await rig.harness("claude");
+    const fake = claude.fake as FakeClaude;
+    const argv0 = [...fake.runs.map(r => r.argv[0]), ...fake.spawns.map(s => s.argv[0])];
+    expect(argv0.length).toBeGreaterThan(0);
+    for (const program of argv0) expect(program).toBe(`${FakeClaude.pluginRoot}/bin/comms`);
+  });
+});

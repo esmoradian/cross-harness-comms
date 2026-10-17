@@ -16,6 +16,7 @@ export type ToolEvent = { tool_use_id: string; agentId?: string } & (
 export type ToolResult = { result: unknown } | { deny: string };
 export interface PromptInput { text: string; asUser?: true }
 export interface ClaudeAPI {
+  plugin: { name: string; root: string };
   env?: { get(name: string): Promise<string | undefined> };
   ui?: { log(text: string): void };
   clock?: { now(): Promise<number>; after(delay: number, callback: () => void | Promise<void>): { cancel(): void } };
