@@ -6,7 +6,9 @@ const root = join(import.meta.dir, "..");
 
 // Bundles the Pi extension into `outdir` as `index.js`.
 export async function buildPiExtension(outdir: string): Promise<void> {
-  const build = await Bun.build({ entrypoints: [join(root, "adapters/pi/src/index.ts")], outdir, target: "node", format: "esm" });
+  // Pi provides pi-tui to extensions at runtime, so the card uses that copy (ADR-017).
+  const build = await Bun.build({ entrypoints: [join(root, "adapters/pi/src/index.ts")], outdir, target: "node", format: "esm",
+    external: ["@earendil-works/pi-tui"] });
   if (!build.success) throw new AggregateError(build.logs, "Pi build failed");
 }
 

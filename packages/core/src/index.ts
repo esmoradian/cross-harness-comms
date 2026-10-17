@@ -126,7 +126,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   };
   const delivery = (message: Message) => {
     const sender = agents().find(a => a.id === message.sender)!;
-    return { message, from: `comms:${sender.name}`, harness: sender.harness };
+    return { message, from: `comms:${sender.name}`, harness: sender.harness, cwd: sender.cwd };
   };
   const deliverToCodex = (message: Message) => {
     const chain = (codexChains.get(message.recipient) ?? Promise.resolve()).then(async () => {

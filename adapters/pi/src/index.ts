@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { connectSession, messageId, type SessionClient } from "@cross-harness-comms/client";
 import { localRuntime } from "@cross-harness-comms/client/runtime";
-import { formatMessage, sendSummary, SEND_SCHEMA, type Harness } from "@cross-harness-comms/protocol";
+import { sendSummary, SEND_SCHEMA, type Harness } from "@cross-harness-comms/protocol";
+import { renderCommsMessage } from "./card.ts";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
 import type { Component } from "@earendil-works/pi-tui";
 
@@ -70,11 +71,18 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
     await close();
     nativeId = ctx.sessionManager.getSessionId();
     session = await connectSession(runtime, { harness: "pi", session_key: nativeId, host: runtime.host, cwd: ctx.cwd }, async delivery => {
-      pi.sendMessage({ customType: "cross-harness-message", content: formatMessage(delivery), display: true },
-        { triggerTurn: true, deliverAs: "followUp" });
+      const { message, from, harness } = delivery;
+      const name = from.replace(/^comms:/, ""), cwd = delivery.cwd ?? "";
+      const details: CommsMessageDetails = { from, name, harness, cwd, id: message.id, ...(message.reply_to ? { reply_to: message.reply_to } : {}), body: message.body };
+      // Pi Intercom's Markdown, without a tag or authority note; the card draws `details` (ADR-017).
+      const replies = message.reply_to ? ` This replies to \`${message.reply_to}\`.` : "";
+      const content = `**From ${name}** (${harness} · ${cwd})\nReply with comms_send to \`${from}\` with reply_to \`${message.id}\`.${replies}\n\n${message.body}`;
+      // Starts a turn when Pi is idle and steers a busy session.
+      pi.sendMessage({ customType: "comms_message", content, display: true, details }, { triggerTurn: true, deliverAs: "steer" });
     });
   });
   pi.on("session_shutdown", close);
+  pi.registerMessageRenderer("comms_message", (message, options, theme) => renderCommsMessage(message.details, options.expanded, theme));
   for (const name of ["comms_send", "comms_list"]) pi.registerTool({
     name, label: name === "comms_send" ? "Send agent message" : "List agents",
     description: name === "comms_send" ? "Send to a comms address. Reply with reply_to set to the message ID." : "List cross-harness agents and their presence.",
