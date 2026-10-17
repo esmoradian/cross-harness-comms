@@ -32,6 +32,8 @@ export interface Delivery {
   message: Message;
   from: string;
   harness: Harness;
+  // The sender's working directory from its agent record; optional because it was added within version 1 (ADR-005, ADR-017).
+  cwd?: string;
 }
 
 export interface VersionRange { min: number; max: number }

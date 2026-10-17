@@ -1,8 +1,11 @@
-import type { PiAPI, PiContext, PiTool, PiToolResult } from "../../adapters/pi/src/index.ts";
+import type { Component } from "@earendil-works/pi-tui";
+import type { PiAPI, PiContext, PiMessageRenderer, PiMessageRenderOptions, PiTheme, PiTool, PiToolResult } from "../../adapters/pi/src/index.ts";
 
 export class FakePi implements PiAPI {
   readonly calls: { method: string; args: unknown[] }[] = [];
   readonly tools = new Map<string, PiTool>();
+  // Message renderers by custom type; Pi keeps one per type, so a later registration replaces an earlier one.
+  readonly renderers = new Map<string, PiMessageRenderer>();
   readonly incoming: { message: Parameters<PiAPI["sendMessage"]>[0]; options: Parameters<PiAPI["sendMessage"]>[1] }[] = [];
   readonly userMessages: unknown[] = [];
   private handlers = new Map<string, Parameters<PiAPI["on"]>[1][]>();
@@ -16,6 +19,17 @@ export class FakePi implements PiAPI {
   registerTool(tool: PiTool) {
     this.calls.push({ method: "registerTool", args: [tool] });
     this.tools.set(tool.name, tool);
+  }
+  registerMessageRenderer(customType: string, renderer: PiMessageRenderer) {
+    this.calls.push({ method: "registerMessageRenderer", args: [customType, renderer] });
+    this.renderers.set(customType, renderer);
+  }
+  // Calls the renderer registered for a sent message's custom type with the CustomMessage Pi builds from it.
+  // Unlike Pi, this does not catch a throwing renderer, so tests see the error instead of Pi's fallback.
+  render(message: Parameters<PiAPI["sendMessage"]>[0], options: PiMessageRenderOptions, theme: PiTheme): Component | undefined {
+    const renderer = this.renderers.get(message.customType);
+    if (!renderer) throw new Error(`Pi message renderer not registered: ${message.customType}`);
+    return renderer({ role: "custom", ...message, timestamp: 1_760_000_000_000 }, options, theme);
   }
   on(event: Parameters<PiAPI["on"]>[0], handler: Parameters<PiAPI["on"]>[1]) {
     this.calls.push({ method: "on", args: [event, handler] });

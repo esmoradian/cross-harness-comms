@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { connectSession, messageId, type SessionClient } from "@cross-harness-comms/client";
 import { localRuntime } from "@cross-harness-comms/client/runtime";
-import { formatMessage, sendSummary, SEND_SCHEMA } from "@cross-harness-comms/protocol";
+import { formatMessage, sendSummary, SEND_SCHEMA, type Harness } from "@cross-harness-comms/protocol";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
+import type { Component } from "@earendil-works/pi-tui";
 
 // Structural subset of Pi 0.85.1 extension types. See tests/SOURCES.md.
 export interface PiContext {
@@ -22,8 +23,39 @@ export interface PiTool {
   execute(id: string, params: Record<string, unknown>, signal: AbortSignal | undefined,
     onUpdate: ((result: PiToolResult) => void) | undefined, ctx: PiContext): Promise<PiToolResult>;
 }
+// A custom message as Pi passes it to a message renderer.
+export interface PiCustomMessage {
+  role: "custom";
+  customType: string;
+  content: string | { type: string; text?: string }[];
+  display: boolean;
+  details?: unknown;
+  timestamp: number;
+}
+export interface PiTheme {
+  fg(color: string, text: string): string;
+}
+export interface PiMessageRenderOptions {
+  expanded: boolean;
+  outputPad: number;
+}
+export type PiMessageRenderer = (message: PiCustomMessage, options: PiMessageRenderOptions, theme: PiTheme) => Component | undefined;
+
+// The `details` of a `comms_message`, which the card renders (ADR-017).
+export interface CommsMessageDetails {
+  // The sender's `comms:` address, and `name` is that address without `comms:`.
+  from: string;
+  name: string;
+  harness: Harness;
+  cwd: string;
+  id: string;
+  reply_to?: string;
+  body: string;
+}
+
 export interface PiAPI {
   registerTool(tool: PiTool): void;
+  registerMessageRenderer(customType: string, renderer: PiMessageRenderer): void;
   on(event: "session_start" | "session_shutdown",
     handler: (event: { type: string; reason?: string }, ctx: PiContext) => void | Promise<void>): void;
   sendMessage(message: { customType: string; content: string; display: boolean; details?: unknown },

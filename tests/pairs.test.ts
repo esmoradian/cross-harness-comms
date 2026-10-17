@@ -5,6 +5,7 @@ import { FakeClaude } from "./fakes/claude.ts";
 import { FakeCodex } from "./fakes/codex.ts";
 import { FakePi } from "./fakes/pi.ts";
 import { eventually, uuidV7 } from "./helpers.ts";
+import { expectedContent } from "./pi-card-support.ts";
 import { withRig, type HarnessSession } from "./rig.ts";
 
 const harnesses: Harness[] = ["pi", "claude", "codex"];
@@ -17,14 +18,20 @@ function expectedWrapper(sender: HarnessSession, message: Message) {
   return `<cross-harness-message from="comms:${sender.agent.name}" harness="${sender.harness}" id="${message.id}"${reply}>\n${escaped}\n</cross-harness-message>\n${authority}\n${instructions}`;
 }
 
+// Pi shows its own Markdown `comms_message` (ADR-017); every other harness gets the shared wrapper.
+function expectedText(receiver: HarnessSession, sender: HarnessSession, message: Message) {
+  if (!(receiver.fake instanceof FakePi)) return expectedWrapper(sender, message);
+  return expectedContent({ name: sender.agent.name, harness: sender.harness, cwd: sender.agent.cwd, id: message.id,
+    ...(message.reply_to ? { reply_to: message.reply_to } : {}), body: message.body });
+}
+
 export function assertNonUserDelivery(session: HarnessSession) {
   if (session.fake instanceof FakePi) {
     expect(session.fake.userMessages).toEqual([]);
     for (const { message, options } of session.fake.incoming) {
-      expect(message.customType).toBe("cross-harness-message");
+      expect(message.customType).toBe("comms_message");
       expect(message.display).toBe(true);
-      expect(options?.triggerTurn).toBe(true);
-      expect(["followUp", "steer"]).toContain(options?.deliverAs ?? "missing delivery mode");
+      expect(options).toEqual({ triggerTurn: true, deliverAs: "steer" });
     }
   } else if (session.fake instanceof FakeClaude) {
     for (const input of session.fake.incoming) expect(input).not.toHaveProperty("asUser");
@@ -53,7 +60,7 @@ for (const from of harnesses) for (const to of harnesses) {
       expect(original.recipient).toBe(receiver.agent.id);
       expect(original.body).toBe(body);
       expect(original.reply_to ?? null).toBeNull();
-      expect(receiver.incoming()[0]).toBe(expectedWrapper(sender, original));
+      expect(receiver.incoming()[0]).toBe(expectedText(receiver, sender, original));
       await rig.state(original.id, "acked");
 
       await receiver.send(`comms:${sender.agent.name}`, "Here is my review.", original.id);
@@ -65,7 +72,7 @@ for (const from of harnesses) for (const to of harnesses) {
       expect(reply.recipient).toBe(sender.agent.id);
       expect(reply.reply_to).toBe(original.id);
       expect(reply.body).toBe("Here is my review.");
-      expect(sender.incoming()[0]).toBe(expectedWrapper(receiver, reply));
+      expect(sender.incoming()[0]).toBe(expectedText(sender, receiver, reply));
       await rig.state(reply.id, "acked");
 
       // Replies are ordinary messages and can themselves be replied to (ADR-007).
@@ -73,7 +80,7 @@ for (const from of harnesses) for (const to of harnesses) {
       await eventually(receiver.incoming, texts => expect(texts).toHaveLength(2));
       const followUp = rig.rows()[2]!;
       expect(followUp.reply_to).toBe(reply.id);
-      expect(receiver.incoming()[1]).toBe(expectedWrapper(sender, followUp));
+      expect(receiver.incoming()[1]).toBe(expectedText(receiver, sender, followUp));
       await rig.state(followUp.id, "acked");
       assertNonUserDelivery(sender);
       assertNonUserDelivery(receiver);

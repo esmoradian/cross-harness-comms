@@ -13,10 +13,11 @@
     "build": "bun scripts/build.ts"
   },
   "devDependencies": {
-    "@types/bun": "1.3.14",
-    "typescript": "5.9.3",
-    "@cross-harness-comms/protocol": "workspace:*",
     "@cross-harness-comms/client": "workspace:*",
-    "@cross-harness-comms/core": "workspace:*"
+    "@cross-harness-comms/core": "workspace:*",
+    "@cross-harness-comms/protocol": "workspace:*",
+    "@earendil-works/pi-tui": "0.85.1",
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
   }
 }

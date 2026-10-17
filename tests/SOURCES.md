@@ -7,15 +7,31 @@ The first-pass scaffold used throwing exports; the current suite also specifies 
 ## Pi
 
 Source: [Pi extension documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md), checked against the installed 0.85.1 copy under `/opt/homebrew/Cellar/pi-coding-agent/0.85.1/libexec/lib/node_modules/@earendil-works/pi-coding-agent/docs/extensions.md`.
-Relevant sections are `session_start`, `session_shutdown`, `pi.registerTool`, and `pi.sendMessage`.
+Relevant sections are `session_start`, `session_shutdown`, `pi.registerTool`, `pi.sendMessage`, `pi.registerMessageRenderer`, and Custom UI (Message and Entry Rendering, Theme Colors).
 
 - Registration uses `pi.on(event, handler)` and `pi.registerTool(definition)`.
 - The tool executes with `(toolCallId, params, signal, onUpdate, ctx)`.
 - Identity comes from `ctx.sessionManager.getSessionId()`.
 - `pi.sendMessage(message, options)` accepts a custom message and returns void, so acceptance is a successful synchronous call.
-- `triggerTurn: true` requests a follow-up; the tests accept either documented `followUp` or `steer` delivery.
+- Incoming deliveries use `{ triggerTurn: true, deliverAs: "steer" }`: `steer` queues the message while Pi is streaming, and `triggerTurn` starts a turn when Pi is idle (ADR-017).
 - `parameters` is deliberately opaque in the structural subset; the fake does not claim to validate or implement TypeBox schemas.
 - The `sendUserMessage` recorder detects accidental use of the user channel.
+
+### Message renderer and card (ADR-017)
+
+Sources: the installed Pi 0.85.1 declarations in `dist/core/extensions/types.d.ts` (`MessageRenderer`, `MessageRenderOptions`, `registerMessageRenderer`, `sendMessage`) and `dist/core/messages.d.ts` (`CustomMessage`), Pi's own caller `dist/modes/interactive/components/custom-message.js`, the bundled `@earendil-works/pi-tui` 0.85.1 (`Component` in `dist/tui.d.ts`; `truncateToWidth`, `visibleWidth`, `wrapTextWithAnsi`, and `stripTerminalSequences` in `dist/utils.d.ts`), all under `/opt/homebrew/Cellar/pi-coding-agent/0.85.1/libexec/lib/node_modules/@earendil-works/pi-coding-agent/`, and Pi Intercom 0.13.0 at `~/.pi/agent/npm/node_modules/pi-intercom/` (`ui/inline-message.ts`, and in `index.ts` `sendIncomingMessage` and the `intercom_message` renderer).
+
+- `registerMessageRenderer(customType, renderer)` keeps one renderer per custom type; the fake records each in `renderers` by type.
+- Pi calls a renderer as `(message, { expanded, outputPad }, theme)`, where `message` is the `CustomMessage` built from the sent message, `{ role: "custom", customType, content, display, details, timestamp }`.
+  `fake.render` builds the same object; the fixed timestamp stands in for Pi's `Date.now()`.
+- Pi rebuilds the component when Ctrl+O toggles `expanded`, so each state is a separate renderer call.
+- A renderer returning `undefined` makes Pi draw `content` itself; Pi also catches a throwing renderer and falls back.
+  The fake does not catch, so a renderer that throws fails the test instead of passing as a fallback.
+- `theme.fg(color, text)` returns colored text; the structural subset declares only `fg`, the one theme method the card uses.
+  The identity theme returns text unchanged; the marker theme wraps it in a distinct 256-color SGR code per color and a `39` foreground reset, as Pi's themes emit SGR codes, so widths match the identity theme and tests read each character's color.
+- Widths are measured with pi-tui's own `visibleWidth`, and visible text with `stripTerminalSequences`.
+- `@earendil-works/pi-tui` 0.85.1 is a root dev dependency for types and tests; Pi provides it to extensions at runtime, so the built extension imports it instead of bundling it.
+- Pi Intercom's card draws a rounded frame with `muted` borders, a `toolTitle` header that adds ` Ctrl+O expands ` when collapsed, a `text` body, and `dim` metadata; the exact lines in the tests follow its layout with comms fields in place of Pi Intercom's.
 
 ## Claude Code
 
@@ -118,7 +134,7 @@ The fake models that accepted design assumption without claiming the launch topo
   Missing/invalid credentials use `INVALID_TOKEN`, and acknowledging another recipient's message uses `FORBIDDEN`.
 - Unknown identity fields cannot override native session identity or token ownership.
 - Codex errors at the MCP tool boundary use `isError: true` and explain the missing `thread_id`.
-- Pi's custom message type is `cross-harness-message`.
+- Pi's custom message type is `comms_message`, with Markdown `content` in place of the shared wrapper (ADR-017).
   Claude omits `asUser`; Codex has only a text queue interface, so provenance comes from the shared wrapper.
 - Synthetic protocol versions 100 and 101 exercise older wire shapes while storing the canonical current message shape.
   They are fixtures, not planned release versions; production starts at version 1 with no conversion steps.
