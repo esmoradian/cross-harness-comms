@@ -30,6 +30,10 @@ export function createClient(stream: Duplex, notification?: (method: string, par
   stream.on("error", finish);
   readPackets(stream, packet => {
     if ("method" in packet) {
+      if (packet.method === "ping" && packet.id !== undefined) {
+        writePacket(stream, { jsonrpc: "2.0", id: packet.id, result: {} });
+        return;
+      }
       notification?.(packet.method, packet.params);
       if (packet.method === "deliver") {
         const value = packet.params as Delivery;
@@ -88,11 +92,12 @@ export interface SessionClient extends AdapterHandle {
   list(): Promise<MethodTable["list"]["result"]>;
 }
 
-// A connection owns its token. Reconnect registers the same native identity and
+// A session retains its token. Reconnect registers the same native identity and
 // drains unacknowledged mail before processing newly arriving deliveries.
 export async function connectSession(runtime: AdapterRuntime, session: SessionRegistration,
   accept: (delivery: Delivery) => Promise<void>): Promise<SessionClient> {
   let stopped = false;
+  let heldToken: string | undefined;
   let current: { client: CommsClient; token: string } | undefined;
   let connecting: Promise<void> | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
@@ -107,8 +112,9 @@ export async function connectSession(runtime: AdapterRuntime, session: SessionRe
       }
     });
     try {
-      const hello = await client.hello({ versions: VERSION_RANGE, session });
+      const hello = await client.hello({ versions: VERSION_RANGE, session, ...(heldToken ? { token: heldToken } : {}) });
       if (!hello.token) throw failure("INVALID_TOKEN");
+      heldToken = hello.token;
       if (hello.notice) runtime.notice(hello.notice);
       if (stopped) { await client.close(); return; }
       const connection = { client, token: hello.token };
@@ -147,10 +153,20 @@ export async function connectSession(runtime: AdapterRuntime, session: SessionRe
   await connect();
   return {
     async send(params) {
-      const { client, token } = await ready();
-      const result = await client.request("send", { ...params, token });
-      if (result.notice) runtime.notice(result.notice);
-      return result;
+      // Retry one uncertain transport outcome, retaining the caller-minted ID.
+      // Application errors are definitive and must not trigger another attempt.
+      for (let attempt = 0; ; attempt++) {
+        const connection = await ready();
+        try {
+          const result = await connection.client.request("send", { ...params, token: connection.token });
+          if (result.notice) runtime.notice(result.notice);
+          return result;
+        } catch (error) {
+          if (attempt || (error as { data?: { code?: string } }).data?.code !== "DISCONNECTED") throw error;
+          if (current === connection) current = undefined;
+          await connection.client.close();
+        }
+      }
     },
     async list() {
       const result = await (await ready()).client.request("list", {});

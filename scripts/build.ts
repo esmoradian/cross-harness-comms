@@ -16,7 +16,7 @@ for (const harness of ["pi", "claude", "codex"]) {
   if (harness === "pi") {
     const build = await Bun.build({ entrypoints: ["adapters/pi/src/index.ts"], outdir: `${output}/src`, target: "node", format: "esm" });
     if (!build.success) throw new AggregateError(build.logs, "Pi build failed");
-    await Bun.write(`${output}/package.json`, JSON.stringify({ name: "@cross-harness-comms/pi", version: "0.1.0", type: "module",
+    await Bun.write(`${output}/package.json`, JSON.stringify({ name: "@cross-harness-comms/pi", version: "0.1.1", type: "module",
       pi: { extensions: ["./src/index.js"] } }, null, 2) + "\n");
   } else if (harness === "claude") {
     await cp("adapters/claude/.claude-plugin", `${output}/.claude-plugin`, { recursive: true });

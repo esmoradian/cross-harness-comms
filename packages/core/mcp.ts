@@ -75,7 +75,7 @@ export async function runMcp(io: CliIO, runtime: CliRuntime): Promise<number> {
         if (request.id === undefined) continue;
         let result: unknown;
         if (request.method === "initialize") result = { protocolVersion: request.params?.protocolVersion ?? "2024-11-05",
-          capabilities: { tools: {} }, serverInfo: { name: "comms", version: "0.1.0" } };
+          capabilities: { tools: {} }, serverInfo: { name: "comms", version: "0.1.1" } };
         else if (request.method === "tools/list") result = { tools: [
           { name: "comms_send", description: "Send a message to a comms address; use reply_to when replying.", inputSchema: SEND_SCHEMA },
           { name: "comms_list", description: "List cross-harness agents and presence.", inputSchema: { type: "object", properties: {} } },

@@ -7,7 +7,7 @@ import { VERSION_RANGE } from "@cross-harness-comms/protocol";
 import { createCore } from "./src/index.ts";
 import type { CliIO, CliRuntime } from "./cli.ts";
 
-export const CORE_VERSION = "0.1.0";
+export const CORE_VERSION = "0.1.1";
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const compare = (a: string, b: string) => {
   const left = a.split(".").map(Number), right = b.split(".").map(Number);

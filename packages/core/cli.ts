@@ -1,5 +1,5 @@
 import type { Duplex } from "node:stream";
-import { createClient, messageId, writePacket } from "@cross-harness-comms/client";
+import { createClient, readPackets, writePacket } from "@cross-harness-comms/client";
 import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type SendParams } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
 import { ensure, serve, CORE_VERSION } from "./lifecycle.ts";
@@ -36,7 +36,7 @@ Usage: comms <command>
   ensure                 Install/start the newest local core; print its address
   serve                  Run the core until interrupted
   attach                 Register from JSON stdin and stream protocol packets
-  send                   Send JSON on stdin: token, to, body, optional id/reply_to
+  send                   Send JSON on stdin: token, id, to, body, optional reply_to
   ack                    Acknowledge JSON on stdin: token, id
   detach                 Close a session using its token on stdin
   list                   List agents and presence as JSON
@@ -77,7 +77,14 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
         await new Promise<void>((resolve, reject) => {
           const abort = () => { stream.destroy(); resolve(); };
           const finish = () => { io.signal.removeEventListener("abort", abort); resolve(); };
-          stream.on("data", (chunk: string) => io.stdout(chunk));
+          readPackets(stream, packet => {
+            if ("method" in packet && packet.method === "ping" && packet.id !== undefined) {
+              writePacket(stream, { jsonrpc: "2.0", id: packet.id, result: {} });
+              return;
+            }
+            io.stdout(JSON.stringify(packet) + "\n");
+            if ("error" in packet) { stream.destroy(); reject(new Error(packet.error.message)); }
+          }, reject);
           stream.once("end", finish); stream.once("close", finish); stream.once("error", reject);
           io.signal.addEventListener("abort", abort, { once: true });
           if (io.signal.aborted) { abort(); return; }
@@ -95,7 +102,8 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
       switch (command) {
         case "send": {
           const params = await readInput(io);
-          result = await client.request("send", { ...params, id: params.id ?? messageId() } as unknown as SendParams);
+          if (typeof params.id !== "string" || !params.id) throw new Error("send requires a sender-minted id");
+          result = await client.request("send", params as unknown as SendParams);
           break;
         }
         case "ack": result = await client.request("ack", await readInput(io) as unknown as { token: string; id: string }); break;
