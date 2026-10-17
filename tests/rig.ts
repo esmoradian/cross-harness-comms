@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { expect } from "bun:test";
-import { createCore, type Core } from "@cross-harness-comms/core";
+import { createCore, type Core, type CodexSnapshot } from "@cross-harness-comms/core";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
 import type { Agent, Harness, Message, SessionRegistration, VersionPolicy, WirePacket } from "@cross-harness-comms/protocol";
@@ -46,7 +46,9 @@ export class Rig {
   private observer: Peer | undefined;
 
   // Anticipatory option passed structurally; Part 2 adds it to the core's public type and implements it.
-  constructor(readonly protocol?: VersionPolicy, readonly coreOptions: { pingTimeoutMs?: number } = {}) {}
+  constructor(readonly protocol?: VersionPolicy, readonly coreOptions: {
+    pingTimeoutMs?: number; codexPollMs?: number; codexDaemon?: () => Promise<CodexSnapshot | undefined>;
+  } = {}) {}
   open() {
     this.core = createCore({ databasePath: this.databasePath, run: this.codexRun, ...this.coreOptions, ...(this.protocol ? { protocol: this.protocol } : {}) });
   }
@@ -129,7 +131,7 @@ export class Rig {
   cliRuntime(): CliRuntime {
     return { connect: this.connect, platform: {
       dataDirectory: () => this.directory, socketAddress: () => "memory://comms", binaryName: () => "comms",
-      parentExecutable: async () => this.codexExecutable,
+      processExecutable: async () => this.codexExecutable, codexHome: () => join(this.directory, "codex"),
       prepareListen: async () => { throw new Error("Unit tests must not listen"); },
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
     } };
@@ -200,7 +202,7 @@ export class Rig {
   }
 }
 
-export async function withRig(run: (rig: Rig) => Promise<void>, protocol?: VersionPolicy, coreOptions?: { pingTimeoutMs?: number }) {
+export async function withRig(run: (rig: Rig) => Promise<void>, protocol?: VersionPolicy, coreOptions?: Rig["coreOptions"]) {
   const rig = new Rig(protocol, coreOptions);
   try { rig.open(); await run(rig); }
   finally { await rig.close(); }
