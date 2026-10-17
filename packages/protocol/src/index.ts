@@ -44,7 +44,9 @@ export interface HelloResult {
   notice?: string;
 }
 export interface SendParams {
-  token: string;
+  // Either a session token, or an online Codex thread when sent by the Codex MCP server (ADR-014).
+  token?: string;
+  codex_thread?: string;
   id: string;
   to: string;
   body: string;
@@ -58,8 +60,8 @@ export interface MethodTable {
   rename: { params: { address: string; name: string }; result: Agent };
   inspect: { params: { id: string }; result: Message };
   status: { params: Record<string, never>; result: { version: string; protocol: number } };
-  codex_start: { params: { pid: number; session: SessionRegistration }; result: { ok: true } };
-  codex_watch: { params: { pid: number }; result: { session?: SessionRegistration } };
+  codex_session_start: { params: { session: SessionRegistration; executable: string }; result: { agent: Agent } };
+  codex_session_end: { params: { session_key: string }; result: { ok: true } };
   hello: { params: HelloParams; result: HelloResult };
   send: { params: SendParams; result: SendResult };
   deliver: { params: Delivery; result: never };

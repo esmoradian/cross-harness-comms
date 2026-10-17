@@ -1,14 +1,10 @@
 {
   "hooks": {
     "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "exec \"${CLAUDE_PLUGIN_ROOT}/bin/comms\" session-start"
-          }
-        ]
-      }
+      { "hooks": [{ "type": "command", "command": "exec \"${CLAUDE_PLUGIN_ROOT}/bin/comms\" session-start" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "exec \"${CLAUDE_PLUGIN_ROOT}/bin/comms\" session-end" }] }
     ]
   }
 }

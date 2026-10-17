@@ -3,7 +3,7 @@ import { createClient, readPackets, writePacket } from "@cross-harness-comms/cli
 import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type SendParams } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
 import { ensure, serve, CORE_VERSION } from "./lifecycle.ts";
-import { runMcp, registerCodexSession } from "./mcp.ts";
+import { runMcp, codexHook } from "./mcp.ts";
 
 export interface CliIO {
   stdin: AsyncIterable<string>;
@@ -44,7 +44,8 @@ Usage: comms <command>
   inspect <message-id>   Inspect delivery state
   status                 Show core and protocol versions
   mcp                    Run the Codex MCP server over stdio
-  session-start          Register a Codex SessionStart hook from JSON stdin
+  session-start          Mark a Codex thread online from its SessionStart hook JSON
+  session-end            Mark a Codex thread offline from its SessionEnd hook JSON
   install <harness>      Print local integration instructions
   version                Print binary version
   help                   Show this help
@@ -58,7 +59,7 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
     if (command === "ensure") { io.stdout(await ensure(runtime) + "\n"); return 0; }
     if (command === "serve") return await serve(io, runtime);
     if (command === "mcp") return await runMcp(io, runtime);
-    if (command === "session-start") return await registerCodexSession(io, runtime);
+    if (command === "session-start" || command === "session-end") return await codexHook(io, runtime);
     if (command === "install") {
       const instructions: Record<string, string> = {
         pi: "Build first, then install with pi install /absolute/path/to/dist/plugins/pi.",

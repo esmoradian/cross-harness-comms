@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import { readPackets, writePacket, messageId } from "@cross-harness-comms/client";
-import { DEFAULT_POLICY, convert, failure, negotiate, resolveAddress, MAX_LINE_BYTES,
+import { DEFAULT_POLICY, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
   type Agent, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
 
 export interface Core {
@@ -36,7 +36,15 @@ function registration(value: unknown): SessionRegistration {
     host: string(fields.host), cwd: string(fields.cwd) };
 }
 
-export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number }): Core {
+export type Run = (argv: readonly string[]) => Promise<{ exitCode: number; stderr?: string }>;
+
+// ponytail: no timeout on `codex queue`; a hung command stalls only that thread's deliveries.
+const spawn: Run = async argv => {
+  const child = Bun.spawn([...argv], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+  return { exitCode: await child.exited, stderr: await new Response(child.stderr).text() };
+};
+
+export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number; run?: Run }): Core {
   const policy = options.protocol ?? DEFAULT_POLICY;
   const db = new Database(options.databasePath, { create: true });
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
@@ -48,7 +56,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       id TEXT PRIMARY KEY, sender TEXT NOT NULL REFERENCES agents(id), recipient TEXT NOT NULL REFERENCES agents(id),
       reply_to TEXT REFERENCES messages(id), body TEXT NOT NULL, created_at TEXT NOT NULL,
       state TEXT NOT NULL CHECK(state IN ('queued','delivered','acked')));
-    CREATE INDEX IF NOT EXISTS mailbox ON messages(recipient, state);`);
+    CREATE INDEX IF NOT EXISTS mailbox ON messages(recipient, state);
+    CREATE TABLE IF NOT EXISTS codex_threads (agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL);`);
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS agent_token ON agents(token_hash)");
   const hash = (token: string) => createHash("sha256").update(token).digest("hex");
   const pingTimeoutMs = options.pingTimeoutMs ?? 2000;
@@ -57,15 +66,19 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   const connections = new Set<Connection>();
   const live = new Map<string, Connection>();
   const registrations = new Map<string, Promise<unknown>>();
-  const codexSessions = new Map<number, SessionRegistration>();
-  const watchers = new Map<number, Connection>();
-  const agents = (): Agent[] => (db.query("SELECT id, harness, session_key, host, name, cwd, last_seen FROM agents ORDER BY rowid").all() as Omit<Agent, "online">[])
-    .map(agent => ({ ...agent, online: live.has(agent.id) }));
+  const run = options.run ?? spawn;
+  const codexChains = new Map<string, Promise<void>>();
+  // Codex threads are online from their SessionStart hook until SessionEnd or a failed delivery (ADR-014).
+  const codexOnline = () => new Set((db.query("SELECT agent FROM codex_threads").all() as { agent: string }[]).map(row => row.agent));
+  const agents = (): Agent[] => {
+    const codex = codexOnline();
+    return (db.query("SELECT id, harness, session_key, host, name, cwd, last_seen FROM agents ORDER BY rowid").all() as Omit<Agent, "online">[])
+      .map(agent => ({ ...agent, online: live.has(agent.id) || codex.has(agent.id) }));
+  };
   const packet = (connection: Connection, value: WirePacket) => writePacket(connection.stream,
     convert(value, policy.latest, connection.version ?? policy.latest, policy));
   const detach = (connection: Connection) => {
     connections.delete(connection);
-    for (const [pid, watcher] of watchers) if (watcher === connection) { watchers.delete(pid); codexSessions.delete(pid); }
     for (const finish of connection.pings.values()) finish(false);
     if (connection.agent && live.get(connection.agent) === connection) {
       live.delete(connection.agent);
@@ -78,13 +91,37 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     if (!agent) throw failure("INVALID_TOKEN");
     return agent.id;
   };
+  // The Codex MCP server acts for whichever online thread its call names (ADR-014).
+  const codexSender = (thread: string) => {
+    const agent = agents().find(a => a.harness === "codex" && a.session_key === thread);
+    if (!agent || !codexOnline().has(agent.id)) throw failure("UNKNOWN_SESSION", "Codex thread has not started a comms session");
+    return agent.id;
+  };
   const delivery = (message: Message) => {
     const sender = agents().find(a => a.id === message.sender)!;
     return { message, from: `comms:${sender.name}`, harness: sender.harness };
   };
+  const deliverToCodex = (message: Message) => {
+    const chain = (codexChains.get(message.recipient) ?? Promise.resolve()).then(async () => {
+      if (closed) return;
+      const thread = db.query("SELECT t.executable, a.session_key FROM codex_threads t JOIN agents a ON a.id = t.agent WHERE t.agent = ?")
+        .get(message.recipient) as { executable: string; session_key: string } | null;
+      const current = db.query("SELECT state FROM messages WHERE id = ?").get(message.id) as { state: Message["state"] } | null;
+      if (!thread || !current || current.state === "acked") return;
+      db.query("UPDATE messages SET state = 'delivered' WHERE id = ? AND state = 'queued'").run(message.id);
+      const text = formatMessage(delivery({ ...message, state: "delivered" }));
+      const result = await run([thread.executable, "queue", "--thread", thread.session_key, "--message", text]).catch(() => ({ exitCode: 1 }));
+      if (closed) return;
+      // Codex accepting the queued message is the ACK; a refusal means the thread is gone.
+      if (result.exitCode === 0) db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(message.id);
+      else db.query("DELETE FROM codex_threads WHERE agent = ?").run(message.recipient);
+    });
+    codexChains.set(message.recipient, chain.catch(() => {}));
+  };
   const deliver = (message: Message) => {
+    if (message.state === "acked") return;
     const connection = live.get(message.recipient);
-    if (!connection || message.state === "acked") return;
+    if (!connection) { if (codexOnline().has(message.recipient)) deliverToCodex(message); return; }
     try {
       // State is committed before writing to the stream. Reconnect retries both
       // queued and delivered records, including a write interrupted by a crash.
@@ -105,6 +142,25 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     try { packet(connection, { jsonrpc: "2.0", id, method: "ping", params: {} }); }
     catch { finish(false); }
   });
+  // Creates or refreshes an agent; a token hash is replaced only when given.
+  const upsert = (session: SessionRegistration, tokenHash?: string): Agent => {
+    const now = new Date().toISOString();
+    const agent = agents().find(a => a.harness === session.harness && a.session_key === session.session_key);
+    if (agent) {
+      db.query("UPDATE agents SET host = ?, cwd = ?, last_seen = ? WHERE id = ?").run(session.host, session.cwd, now, agent.id);
+      if (tokenHash) db.query("UPDATE agents SET token_hash = ? WHERE id = ?").run(tokenHash, agent.id);
+      return { ...agent, ...session, last_seen: now, online: true };
+    }
+    const base = `${session.harness}-${basename(session.cwd) || "session"}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64);
+    let name = base, suffix = 1;
+    const names = new Set(agents().map(a => a.name));
+    while (names.has(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
+    const id = messageId();
+    db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null);
+    return { ...session, id, name, last_seen: now, online: true };
+  };
+  const pending = (agent: string) => db.query("SELECT * FROM messages WHERE recipient = ? AND state != 'acked' ORDER BY rowid").all(agent) as Message[];
   const register = async (input: SessionRegistration, connection: Connection, suppliedToken: unknown): Promise<Agent> => {
     const session = registration(input);
     const key = JSON.stringify([session.harness, session.session_key]);
@@ -123,22 +179,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         // A failed liveness check relinquishes the old connection before issuing
         // new credentials. Registrations for this native session are serialized.
       }
-      const now = new Date().toISOString();
       const token = matches ? suppliedToken as string : randomBytes(32).toString("hex");
-      if (!agent) {
-        const base = `${session.harness}-${basename(session.cwd) || "session"}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64);
-        let name = base, suffix = 1;
-        const names = new Set(agents().map(a => a.name));
-        while (names.has(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
-        const id = messageId();
-        db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, hash(token));
-        agent = { ...session, id, name, last_seen: now, online: true };
-      } else {
-        db.query("UPDATE agents SET host = ?, cwd = ?, last_seen = ?, token_hash = ? WHERE id = ?")
-          .run(session.host, session.cwd, now, hash(token), agent.id);
-        agent = { ...agent, ...session, last_seen: now, online: true };
-      }
+      agent = upsert(session, hash(token));
       if (previous) {
         detach(previous);
         try { packet(previous, { jsonrpc: "2.0", method: "session_replaced", params: {} }); previous.stream.end(); }
@@ -164,27 +206,25 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     }
     if (connection.version === undefined) throw failure("HELLO_REQUIRED");
     switch (method) {
-      case "codex_start": {
-        const pid = params.pid;
-        if (!Number.isSafeInteger(pid) || (pid as number) <= 0) throw failure("INVALID_PARAMS");
-        const session = registration(params.session);
-        if (session.harness !== "codex") throw failure("INVALID_PARAMS");
-        codexSessions.set(pid as number, session);
-        const watcher = watchers.get(pid as number);
-        if (watcher) packet(watcher, { jsonrpc: "2.0", method: "codex_session", params: session });
-        return { ok: true };
+      case "codex_session_start": {
+        const session = registration(params.session), executable = string(params.executable);
+        if (session.harness !== "codex") throw failure("INVALID_PARAMS", "Not a Codex session", -32602);
+        const agent = upsert(session);
+        db.query("INSERT OR REPLACE INTO codex_threads (agent, executable) VALUES (?, ?)").run(agent.id, executable);
+        for (const message of pending(agent.id)) deliverToCodex(message);
+        return { agent };
       }
-      case "codex_watch": {
-        const pid = params.pid;
-        if (!Number.isSafeInteger(pid) || (pid as number) <= 0) throw failure("INVALID_PARAMS");
-        const previous = watchers.get(pid as number);
-        if (previous && previous !== connection) throw failure("FORBIDDEN", "Process already has an MCP connection");
-        watchers.set(pid as number, connection);
-        return { session: codexSessions.get(pid as number) };
+      case "codex_session_end": {
+        const agent = agents().find(a => a.harness === "codex" && a.session_key === string(params.session_key));
+        if (agent) {
+          db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent.id);
+          db.query("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), agent.id);
+        }
+        return { ok: true };
       }
       case "list": return { agents: agents() };
       case "send": {
-        const sender = authenticated(params);
+        const sender = params.codex_thread === undefined ? authenticated(params) : codexSender(string(params.codex_thread));
         const id = string(params.id);
         if (!uuid.test(id) || typeof params.body !== "string") throw failure("INVALID_MESSAGE");
         const recipient = resolveAddress(string(params.to), agents()).id;
@@ -243,6 +283,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       default: throw failure("METHOD_NOT_FOUND", "Method not found", -32601);
     }
   };
+  // Resume deliveries to Codex threads that were online when the core last stopped.
+  for (const agent of codexOnline()) for (const message of pending(agent)) deliverToCodex(message);
   return {
     attach(stream) {
       if (closed) { stream.destroy(); return; }
@@ -270,9 +312,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
             if (!("method" in request)) throw failure("INVALID_REQUEST");
             const result = await handle(connection, request.method, request.params);
             if (id !== null) packet(connection, { jsonrpc: "2.0", id, result });
-            if (request.method === "hello" && connection.agent) {
-              for (const message of db.query("SELECT * FROM messages WHERE recipient = ? AND state != 'acked' ORDER BY rowid").all(connection.agent) as Message[]) deliver(message);
-            }
+            if (request.method === "hello" && connection.agent) for (const message of pending(connection.agent)) deliver(message);
           } catch (error) {
             const rpc = error as Partial<RpcError>;
             // Never echo request data or tokens, including malformed input.
