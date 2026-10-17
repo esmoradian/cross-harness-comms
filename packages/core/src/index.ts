@@ -172,14 +172,16 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     socket.on("error", () => { if (!connected) fallback(connection); });
   };
   // A missing ACK or an unreachable inbox turns the native route off for this attachment and
-  // resends everything pending as `deliver` packets. The in-flight record stays for a late ACK.
+  // resends the in-flight and queued messages as `deliver` packets; messages already handed over
+  // as packets wait for their ACK or a reconnect. The in-flight record stays for a late ACK.
   const fallback = (connection: Connection) => {
     const inflight = connection.inflight;
     if (!inflight?.timer) return;
     clearTimeout(inflight.timer);
     delete inflight.timer;
     connection.native = false;
-    if (connection.agent && live.get(connection.agent) === connection) for (const message of pending(connection.agent)) deliver(message);
+    if (connection.agent && live.get(connection.agent) === connection)
+      for (const message of pending(connection.agent)) if (message.id === inflight.id || message.state === "queued") deliver(message);
   };
   // While a native Claude session is attached, every non-Claude agent has a reply socket in its inbox directory.
   const openReplySockets = () => {
@@ -372,7 +374,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         clearTimeout(inflight.timer);
         delete connection.inflight;
         db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(inflight.id);
-        if (connection.native) for (const message of pending(agent)) deliver(message);
+        if (connection.native) for (const message of pending(agent)) if (message.state === "queued") deliver(message);
         return { id: inflight.id };
       }
       case "detach": {
