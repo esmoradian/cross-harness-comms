@@ -126,7 +126,8 @@ test("fix 1: an unresponsive connection is pinged and reclaimed after the inject
   }, undefined, { pingTimeoutMs: 0 });
 }, 1000);
 
-for (const harness of ["pi", "claude", "codex"] as Harness[]) {
+// Codex holds no session connection (ADR-014); see codex.test.ts.
+for (const harness of ["pi", "claude"] as Harness[]) {
   test(`fix 1: ${harness} answers liveness pings so a live adapter cannot be displaced`, async () => {
     await withRig(async rig => {
       const owner = await rig.harness(harness), sender = await rig.harness("pi");

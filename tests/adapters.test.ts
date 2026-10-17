@@ -42,10 +42,10 @@ for (const metadata of [null, { session_id: "not-a-thread-id" }]) {
     await withRig(async rig => {
       const target = await rig.peer();
       const b = await target.register(registration("pi"));
-      const fake = new FakeCodex(uuid(), "/projects/shared", 9876);
-      const adapter = createCodexAdapter({ ...rig.runtime(), parentPid: fake.parentPid, run: fake.run });
+      const fake = new FakeCodex(uuid(), "/projects/shared");
+      const adapter = createCodexAdapter(rig.runtime());
       try {
-        await adapter.sessionStart(fake.sessionStart(), { parentPid: fake.parentPid });
+        expect((await rig.hook("session-start", fake.sessionStart())).exitCode).toBe(0);
         const result = await adapter.toolsCall(fake.request("comms_send", {
           to: `comms:${b.agent.name}`, text: "No inferred identity", thread_id: fake.threadId, session_id: fake.threadId,
         }, metadata));
@@ -61,10 +61,10 @@ test("invariant 2: Codex uses thread_id rather than the different session_id in 
   await withRig(async rig => {
     const target = await rig.peer();
     const b = await target.register(registration("pi"));
-    const fake = new FakeCodex(uuid(), "/projects/shared", 9876);
-    const adapter = createCodexAdapter({ ...rig.runtime(), parentPid: fake.parentPid, run: fake.run });
+    const fake = new FakeCodex(uuid(), "/projects/shared");
+    const adapter = createCodexAdapter(rig.runtime());
     try {
-      await adapter.sessionStart(fake.sessionStart(), { parentPid: fake.parentPid });
+      expect((await rig.hook("session-start", fake.sessionStart())).exitCode).toBe(0);
       const result = await adapter.toolsCall(fake.request("comms_send", { to: `comms:${b.agent.name}`, text: "Exact thread" }));
       expect(result.isError).not.toBe(true);
       const delivery = await target.deliveries.next();

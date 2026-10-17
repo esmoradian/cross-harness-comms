@@ -6,7 +6,7 @@ import type { Duplex } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { expect } from "bun:test";
 import { createCore, type Core } from "@cross-harness-comms/core";
-import type { CliRuntime } from "@cross-harness-comms/core/cli";
+import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
 import type { Agent, Harness, Message, SessionRegistration, VersionPolicy, WirePacket } from "@cross-harness-comms/protocol";
 import { registerPi } from "../adapters/pi/src/index.ts";
@@ -32,6 +32,9 @@ export class Rig {
   readonly traffic: { connection: number; direction: "to-core" | "from-core"; packet: WirePacket }[] = [];
   readonly links: { client: Duplex; server: Duplex }[] = [];
   dropNextSendReceipt = false;
+  // Codex threads by ID, and the executable path their SessionStart hook reports.
+  readonly codexFakes = new Map<string, FakeCodex>();
+  codexExecutable = "codex";
   readonly directory = mkdtempSync(join(tmpdir(), "comms-unit-"));
   readonly databasePath = join(this.directory, "comms.sqlite");
   readonly notices: string[] = [];
@@ -45,7 +48,20 @@ export class Rig {
   // Anticipatory option passed structurally; Part 2 adds it to the core's public type and implements it.
   constructor(readonly protocol?: VersionPolicy, readonly coreOptions: { pingTimeoutMs?: number } = {}) {}
   open() {
-    this.core = createCore({ databasePath: this.databasePath, ...this.coreOptions, ...(this.protocol ? { protocol: this.protocol } : {}) });
+    this.core = createCore({ databasePath: this.databasePath, run: this.codexRun, ...this.coreOptions, ...(this.protocol ? { protocol: this.protocol } : {}) });
+  }
+  // The core delivers to Codex itself by running `codex queue --thread <id>`.
+  codexRun = async (argv: readonly string[]) => {
+    const fake = this.codexFakes.get(argv[argv.indexOf("--thread") + 1] ?? "");
+    return fake ? fake.run(argv) : { exitCode: 1, stdout: "", stderr: "no such thread" };
+  };
+  // Runs a Codex hook through the same CLI handler the plugin's hook command uses.
+  async hook(command: "session-start" | "session-end", input: unknown) {
+    let stderr = "";
+    async function* stdin() { yield JSON.stringify(input) + "\n"; }
+    const exitCode = await runCli([command], { stdin: stdin(), signal: new AbortController().signal,
+      stdout: () => {}, stderr: text => { stderr += text; } }, this.cliRuntime());
+    return { exitCode, stderr };
   }
   connect = async (_address = "memory://comms"): Promise<Duplex> => {
     if (!this.core) throw new Error("Fixture core not started");
@@ -113,6 +129,7 @@ export class Rig {
   cliRuntime(): CliRuntime {
     return { connect: this.connect, platform: {
       dataDirectory: () => this.directory, socketAddress: () => "memory://comms", binaryName: () => "comms",
+      parentExecutable: async () => this.codexExecutable,
       prepareListen: async () => { throw new Error("Unit tests must not listen"); },
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
     } };
@@ -143,12 +160,14 @@ export class Rig {
       list = () => claude.tool({ tool: "ListAgents", tool_use_id: uuid() });
       incoming = () => claude.incoming.map(call => call.text);
     } else {
-      const codex = new FakeCodex(sessionId, cwd, 1000 + this.sessions.length);
+      const codex = new FakeCodex(sessionId, cwd);
       fake = codex;
-      const adapter = createCodexAdapter({ ...this.runtime(), parentPid: codex.parentPid, run: codex.run });
-      handle = adapter;
+      this.codexFakes.set(sessionId, codex);
+      const adapter = createCodexAdapter(this.runtime());
+      handle = { close: async () => { await this.hook("session-end", codex.sessionEnd()).catch(() => {}); await adapter.close(); } };
       this.handles.push(handle);
-      await adapter.sessionStart(codex.sessionStart(), { parentPid: codex.parentPid });
+      const started = await this.hook("session-start", codex.sessionStart());
+      if (started.exitCode) throw new Error(started.stderr);
       send = (to, text, reply_to, extra) => adapter.toolsCall(codex.request("comms_send", { to, text, ...(reply_to ? { reply_to } : {}), ...extra }));
       list = () => adapter.toolsCall(codex.request("comms_list", {}));
       incoming = () => codex.commands.filter(argv => argv[1] === "queue").map(argv => argv[argv.indexOf("--message") + 1]!);
