@@ -1,0 +1,21 @@
+{
+  "name": "cross-harness-comms",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.5",
+  "workspaces": [
+    "packages/*",
+    "adapters/*"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3",
+    "@cross-harness-comms/protocol": "workspace:*",
+    "@cross-harness-comms/client": "workspace:*",
+    "@cross-harness-comms/core": "workspace:*"
+  }
+}

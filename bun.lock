@@ -1,0 +1,81 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "cross-harness-comms",
+      "devDependencies": {
+        "@cross-harness-comms/client": "workspace:*",
+        "@cross-harness-comms/core": "workspace:*",
+        "@cross-harness-comms/protocol": "workspace:*",
+        "@types/bun": "1.3.14",
+        "typescript": "5.9.3",
+      },
+    },
+    "adapters/claude": {
+      "name": "@cross-harness-comms/claude",
+      "version": "0.0.0",
+      "dependencies": {
+        "@cross-harness-comms/protocol": "workspace:*",
+      },
+    },
+    "adapters/codex": {
+      "name": "@cross-harness-comms/codex",
+      "version": "0.0.0",
+      "dependencies": {
+        "@cross-harness-comms/client": "workspace:*",
+        "@cross-harness-comms/protocol": "workspace:*",
+      },
+    },
+    "adapters/pi": {
+      "name": "@cross-harness-comms/pi",
+      "version": "0.0.0",
+      "dependencies": {
+        "@cross-harness-comms/client": "workspace:*",
+        "@cross-harness-comms/protocol": "workspace:*",
+      },
+    },
+    "packages/client": {
+      "name": "@cross-harness-comms/client",
+      "version": "0.0.0",
+      "dependencies": {
+        "@cross-harness-comms/protocol": "workspace:*",
+      },
+    },
+    "packages/core": {
+      "name": "@cross-harness-comms/core",
+      "version": "0.0.0",
+      "dependencies": {
+        "@cross-harness-comms/client": "workspace:*",
+        "@cross-harness-comms/protocol": "workspace:*",
+      },
+    },
+    "packages/protocol": {
+      "name": "@cross-harness-comms/protocol",
+      "version": "0.0.0",
+    },
+  },
+  "packages": {
+    "@cross-harness-comms/claude": ["@cross-harness-comms/claude@workspace:adapters/claude"],
+
+    "@cross-harness-comms/client": ["@cross-harness-comms/client@workspace:packages/client"],
+
+    "@cross-harness-comms/codex": ["@cross-harness-comms/codex@workspace:adapters/codex"],
+
+    "@cross-harness-comms/core": ["@cross-harness-comms/core@workspace:packages/core"],
+
+    "@cross-harness-comms/pi": ["@cross-harness-comms/pi@workspace:adapters/pi"],
+
+    "@cross-harness-comms/protocol": ["@cross-harness-comms/protocol@workspace:packages/protocol"],
+
+    "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
+
+    "@types/node": ["@types/node@26.6.5", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg=="],
+
+    "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+  }
+}

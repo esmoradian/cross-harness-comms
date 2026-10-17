@@ -1,0 +1,8 @@
+{
+  "name": "@cross-harness-comms/codex",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": { "@cross-harness-comms/client": "workspace:*", "@cross-harness-comms/protocol": "workspace:*" }
+}

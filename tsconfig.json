@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "types": ["bun"],
+    "skipLibCheck": true
+  },
+  "include": ["packages/**/*.ts", "adapters/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "internal"]
+}
