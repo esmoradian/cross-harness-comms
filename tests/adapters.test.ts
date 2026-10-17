@@ -153,3 +153,28 @@ test("claude runs the binary bundled in its plugin directory, not one on PATH", 
     for (const program of argv0) expect(program).toBe(`${FakeClaude.pluginRoot}/bin/comms`);
   });
 });
+
+// Claude's native list shows its peers by short refs, not session IDs, so when
+// native peer messaging is on, Claude peers are reached natively and appear once.
+const nativePeers = "This session is planner [2a1458].\n\nPeer sessions (1):\n  reviewer [036dfb]  ·  interactive  ·  idle";
+
+test("claude lists Claude peers only natively when native peer messaging is on, and still adds other harnesses", async () => {
+  await withRig(async rig => {
+    const claude = await rig.harness("claude"), peer = await rig.harness("claude");
+    const pi = await rig.harness("pi"), codex = await rig.harness("codex");
+    (claude.fake as FakeClaude).nativeListing = nativePeers;
+    const listing = JSON.stringify(await claude.list());
+    expect(listing).toContain("reviewer [036dfb]");
+    expect(listing).not.toContain(`comms:${peer.agent.name}`);
+    expect(listing).toContain(`comms:${pi.agent.name}`);
+    expect(listing).toContain(`comms:${codex.agent.name}`);
+  });
+});
+
+test("claude lists Claude peers through comms when native peer messaging is unavailable", async () => {
+  await withRig(async rig => {
+    const claude = await rig.harness("claude"), peer = await rig.harness("claude");
+    (claude.fake as FakeClaude).nativeListing = "No peer sessions available.";
+    expect(JSON.stringify(await claude.list())).toContain(`comms:${peer.agent.name}`);
+  });
+});
