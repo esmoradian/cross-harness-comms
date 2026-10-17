@@ -92,3 +92,26 @@ test("fix 3: retrying comms send with an explicit id returns the same receipt an
     expect(rig.rows()[0]).toMatchObject({ id: params.id, body: params.body, sender: a.agent.id, recipient: b.agent.id });
   });
 });
+
+test("fix 3: comms send exits 2 when the core rejects the send, so callers know not to retry", async () => {
+  await withRig(async rig => {
+    const a = await (await rig.peer()).register(registration("pi"));
+    const result = await cli(rig, "send", { token: a.token, id: uuid(), to: "comms:nobody", body: "No such agent" });
+    expect(result.exitCode).toBe(2);
+    expect(rig.rows()).toEqual([]);
+  });
+});
+
+test("fix 3: claude does not retry a send the core rejected", async () => {
+  await withRig(async rig => {
+    const sender = await rig.harness("claude");
+    const fake = sender.fake as FakeClaude;
+    let outcome: { result: unknown } | { error: unknown } | undefined;
+    void sender.send("comms:nobody", "No such agent").then(
+      result => { outcome = { result }; }, error => { outcome = { error }; },
+    );
+    await eventually(() => { fake.runScheduled(); return outcome; }, value => expect(value).toBeDefined());
+    expect(fake.runs.filter(p => p.argv[1] === "send")).toHaveLength(1);
+    expect(rig.rows()).toEqual([]);
+  });
+});
