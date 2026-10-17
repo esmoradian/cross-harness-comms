@@ -45,12 +45,8 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     if (sessionId === previousSession) token = previousToken;
     else { pendingReplies.clear(); received.clear(); sends.clear(); }
     const session = { harness: "claude", session_key: sessionId, cwd: await $.session.cwd(), host: options.host };
-    if (options.binary === "comms") {
-      try {
-        const root = await $.env!.get("CLAUDE_PLUGIN_ROOT");
-        if (root) options.binary = root + "/bin/comms";
-      } catch { /* Embedded callers can pass an explicit binary. */ }
-    }
+    // Mods get no CLAUDE_PLUGIN_ROOT; $.plugin.root is the plugin's directory.
+    if (options.binary === "comms") options.binary = `${$.plugin.root}/bin/comms`;
     const ensure = await $.process.run([options.binary, "ensure"]);
     if (ensure.exitCode) throw new Error(ensure.stderr || "comms ensure failed");
     let resolveReady!: () => void, rejectReady!: (error: unknown) => void;
