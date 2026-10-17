@@ -53,6 +53,23 @@ No real subprocess is launched.
 The fake implements neither the engine's permission dialogs nor its native message transport.
 Native path tests check the exact event and result objects passed through middleware.
 
+### Native inbox (ADR-016)
+
+Sources: the observations of interactive Claude Code 2.1.289 sessions on 2026-10-17 quoted in `internal/HANDOFF-CLAUDE-INBOX.md`, the probes `internal/probes/claude-inbox/inbox-listen.ts`, `internal/probes/claude-inbox/inbox-post.ts`, `internal/probes/claude-inbox-mod/hooks/register.js`, and `internal/probes/claude-inbox-mod/post.ts`, and the generated declarations in `internal/probes/claude-mod/.claude-plugin/types/claude-code/index.d.ts` (`env`, `session.version`, `SessionVersion`, `session.receive`, `SessionReceiveInput`, `SessionReceiveOrigin`, `SessionReceiveResult`).
+
+- `$.env.get(name)` resolves the variable's value or `undefined`; the fake sets only `CLAUDE_CODE_MESSAGING_SOCKET`, and only for a native session.
+- `$.session.version()` resolves `{ version, base, builtAt }`; the default is the observed `{ version: "2.1.289", base: "2.1.289", builtAt: "2026-10-03T19:21:39Z" }`.
+- `on("session.receive", handler)` hooks receive `{ origin, text }` and call `next(e)`, which resolves `{ text }` once the delivery is queued; a hook may answer `{ consumed }` instead.
+  The fake's innermost `next` records the text in `queued`, and every chain's answer in `receipts`.
+- The inbox is a real Unix socket named like a PID (`2xxxx.sock`) in a short `/tmp/cc-*` directory standing in for `/tmp/cc-socks`, as `inbox-listen.ts` listens.
+- It reads newline-terminated JSON lines, records each line and each connection's bytes and end, and never writes back on the connection.
+- Each line reaches `session.receive` with `origin` `{ kind: "peer", plugin: from_plugin }`, or `{ kind: "peer" }` without `from_plugin`, and `text` equal to `message.content` verbatim, as observed for lines posted with `"from_plugin": "cross-harness-comms"`; `msg_id` is not exposed.
+- `hold` makes the inbox swallow lines without running the hooks, standing in for a session that never acknowledges; `release()` runs them later, standing in for a late delivery.
+- `holdAttachOutput()` delays the attach child's output chunks, since the host does not promise when a child's output reaches the mod; it orders a late native delivery before the comms fallback copy.
+- Claude's own replies are simulated by writing one line in the observed format to a reply socket and closing the connection: no `from_plugin`, and a `hop-chain` attribute whose value is a placeholder, since only its presence was observed.
+- Bodies are escaped as observed: only the literal `</cross-session-message>` becomes `<\/cross-session-message>`.
+- The fake does not implement Claude's own `SendMessage`, its rendering of peer messages, or its session registry for `ListAgents`; the native listing stays the fixed text in `nativeListing`.
+
 ## Codex
 
 Sources: `internal/probes/codex-mcp/server.mjs`, the session-binding observations in `internal/ARCHITECTURE.md`, and the installed Codex CLI 0.162.1 `codex queue --help` output.
@@ -108,4 +125,5 @@ The fake models that accepted design assumption without claiming the launch topo
 - The SQLite assertions use the documented table and column names and stored insertion order.
   They check committed visibility and restart persistence, not power-loss behavior or fsync policy.
 
-No socket listeners, real harnesses, model servers, installation/download behavior, or cross-machine transports are exercised.
+Only the native inbox tests listen on sockets: the fake Claude inbox and the core's reply sockets are real Unix sockets in a temporary `/tmp/cc-*` directory, removed with the rig.
+No real harnesses, model servers, installation/download behavior, or cross-machine transports are exercised.

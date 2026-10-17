@@ -49,7 +49,7 @@ const spawn: Run = async argv => {
 };
 
 export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number; run?: Run;
-  codexDaemon?: () => Promise<CodexSnapshot | undefined>; codexPollMs?: number }): Core {
+  codexDaemon?: () => Promise<CodexSnapshot | undefined>; codexPollMs?: number; nativeAckMs?: number }): Core {
   const policy = options.protocol ?? DEFAULT_POLICY;
   const db = new Database(options.databasePath, { create: true });
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;

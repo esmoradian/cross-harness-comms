@@ -14,6 +14,8 @@ export interface Agent extends SessionRegistration {
   name: string;
   last_seen: string;
   online: boolean;
+  // Present in `list` for a non-Claude agent when the caller is a Claude session on the native route (ADR-016).
+  claude_address?: string;
 }
 
 export interface Message {
@@ -38,6 +40,8 @@ export interface HelloParams {
   token?: string;
   // Absent for a one-shot CLI connection negotiating before token-authenticated commands.
   session?: SessionRegistration;
+  // A Claude session's inbox socket and engine version, for the native inbox route (ADR-016).
+  claude?: { inbox: string; version: string };
 }
 export interface HelloResult {
   version: number;
@@ -68,7 +72,9 @@ export interface MethodTable {
   send: { params: SendParams; result: SendResult };
   deliver: { params: Delivery; result: never };
   ack: { params: { token: string; id: string }; result: { id: string; state: "acked" } };
-  list: { params: Record<string, never>; result: { agents: Agent[]; notice?: string } };
+  // A Claude session acknowledging the native inbox line sent from the reply socket `from` (ADR-016).
+  native_ack: { params: { token: string; from: string }; result: { id: string } };
+  list: { params: { token?: string }; result: { agents: Agent[]; notice?: string } };
 }
 export type RequestMethod = Exclude<keyof MethodTable, "deliver">;
 export interface RpcError {
@@ -113,6 +119,31 @@ export function resolveAddress(address: string, agents: readonly Agent[]): Agent
   return matches[0];
 }
 
+
+// Claude Code's peer-message inbox line (ADR-016). The formats we speak are compiled in.
+export const CLAUDE_INBOX_VERSIONS: readonly number[] = [1];
+export const CLAUDE_NATIVE_MIN_VERSION = "2.1.289";
+
+export interface ClaudeInboxLine {
+  msgV: number;
+  msg_id: string;
+  // The sender's `uds:` address.
+  from: string;
+  // The element's `from-name` attribute.
+  from_name: string;
+  // The unescaped message body.
+  body: string;
+}
+
+// Writes one inbox line, without its trailing newline, stamped as sent by this plugin.
+export function formatClaudeInboxLine(_line: { msg_id: string; from: string; from_name: string; body: string }): string {
+  throw new Error("not implemented");
+}
+
+// Reads one inbox line, or returns undefined when it is not a peer-message line.
+export function parseClaudeInboxLine(_line: string): ClaudeInboxLine | undefined {
+  throw new Error("not implemented");
+}
 
 export const MAX_LINE_BYTES = 1024 * 1024;
 export const VERSION_RANGE: VersionRange = { min: 1, max: 1 };

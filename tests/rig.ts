@@ -13,7 +13,7 @@ import { registerPi } from "../adapters/pi/src/index.ts";
 import { registerClaude } from "../adapters/claude/src/index.ts";
 import { createCodexAdapter } from "../adapters/codex/src/index.ts";
 import { FakePi } from "./fakes/pi.ts";
-import { FakeClaude } from "./fakes/claude.ts";
+import { CLAUDE_VERSION, FakeClaude, FakeClaudeInbox } from "./fakes/claude.ts";
 import { FakeCodex } from "./fakes/codex.ts";
 import { eventually, memoryPair, Peer, uuid } from "./helpers.ts";
 
@@ -28,6 +28,10 @@ export interface HarnessSession {
   close(): Promise<void>;
 }
 
+// A Claude session with CLAUDE_CODE_MESSAGING_SOCKET set: `listen: false` leaves no listener
+// at that path, and `version` is what $.session.version() reports.
+export interface NativeClaudeOptions { listen?: boolean; version?: string }
+
 export class Rig {
   readonly traffic: { connection: number; direction: "to-core" | "from-core"; packet: WirePacket }[] = [];
   readonly links: { client: Duplex; server: Duplex }[] = [];
@@ -36,6 +40,11 @@ export class Rig {
   readonly codexFakes = new Map<string, FakeCodex>();
   codexExecutable = "codex";
   readonly directory = mkdtempSync(join(tmpdir(), "comms-unit-"));
+  // Claude's inbox sockets and the core's reply sockets share a short directory, like /tmp/cc-socks,
+  // so socket paths stay under the 104-byte Unix limit.
+  readonly socketDirectory = mkdtempSync("/tmp/cc-");
+  private inboxCount = 0;
+  private inboxes: FakeClaudeInbox[] = [];
   readonly databasePath = join(this.directory, "comms.sqlite");
   readonly notices: string[] = [];
   readonly runtimeCalls: string[] = [];
@@ -47,8 +56,17 @@ export class Rig {
 
   // Anticipatory option passed structurally; Part 2 adds it to the core's public type and implements it.
   constructor(readonly protocol?: VersionPolicy, readonly coreOptions: {
-    pingTimeoutMs?: number; codexPollMs?: number; codexDaemon?: () => Promise<CodexSnapshot | undefined>;
+    pingTimeoutMs?: number; codexPollMs?: number; codexDaemon?: () => Promise<CodexSnapshot | undefined>; nativeAckMs?: number;
   } = {}) {}
+  // Real Claude names an inbox after the session's PID; these never start with 9.
+  inboxPath(): string { return join(this.socketDirectory, `${20000 + this.inboxCount++}.sock`); }
+  // A bare inbox listener for wire-level tests, which records lines and runs no hooks.
+  async inbox(path = this.inboxPath()): Promise<FakeClaudeInbox> {
+    const inbox = new FakeClaudeInbox(path);
+    await inbox.listen();
+    this.inboxes.push(inbox);
+    return inbox;
+  }
   open() {
     this.core = createCore({ databasePath: this.databasePath, run: this.codexRun, ...this.coreOptions, ...(this.protocol ? { protocol: this.protocol } : {}) });
   }
@@ -136,7 +154,7 @@ export class Rig {
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
     } };
   }
-  async harness(harness: Harness, sessionId = uuid(), cwd = "/projects/shared"): Promise<HarnessSession> {
+  async harness(harness: Harness, sessionId = uuid(), cwd = "/projects/shared", options: { claude?: NativeClaudeOptions } = {}): Promise<HarnessSession> {
     let handle: AdapterHandle;
     let fake: HarnessSession["fake"];
     let send: HarnessSession["send"];
@@ -152,7 +170,14 @@ export class Rig {
       list = () => pi.tool("comms_list", {});
       incoming = () => pi.incoming.map(call => call.message.content);
     } else if (harness === "claude") {
-      const claude = new FakeClaude(sessionId, cwd, this.cliRuntime());
+      let claude: FakeClaude;
+      if (options.claude) {
+        const inbox = this.inboxPath();
+        const version = options.claude.version ?? CLAUDE_VERSION.version;
+        claude = new FakeClaude(sessionId, cwd, this.cliRuntime(), {
+          env: { CLAUDE_CODE_MESSAGING_SOCKET: inbox }, version: { ...CLAUDE_VERSION, version, base: version } });
+        if (options.claude.listen !== false) this.inboxes.push(await claude.listenInbox(inbox));
+      } else claude = new FakeClaude(sessionId, cwd, this.cliRuntime());
       fake = claude;
       handle = registerClaude(claude.on, { binary: "comms", host: "fixture-host" });
       this.handles.push(handle);
@@ -184,12 +209,14 @@ export class Rig {
     this.sessions.push(session);
     return session;
   }
-  async restart() {
+  // `between` runs after the old core has closed and before the new one opens.
+  async restart(between?: () => void | Promise<void>) {
     for (const stream of this.streams) stream.destroy();
     this.streams = [];
     await this.core?.close();
     this.core = undefined;
     this.observer = undefined;
+    await between?.();
     this.open();
   }
   async close() {
@@ -198,7 +225,11 @@ export class Rig {
       for (const handle of this.handles) await handle.close();
       for (const stream of this.streams) stream.destroy();
       await this.core?.close();
-    } finally { rmSync(this.directory, { recursive: true, force: true }); }
+      for (const inbox of this.inboxes) await inbox.close();
+    } finally {
+      rmSync(this.directory, { recursive: true, force: true });
+      rmSync(this.socketDirectory, { recursive: true, force: true });
+    }
   }
 }
 
