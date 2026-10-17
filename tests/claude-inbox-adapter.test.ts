@@ -6,6 +6,7 @@ import { FakeClaude } from "./fakes/claude.ts";
 import { helloRequests } from "./fixes-support.ts";
 import { eventually, uuidV7 } from "./helpers.ts";
 import { withRig, type HarnessSession, type Rig } from "./rig.ts";
+import { expectedContent } from "./pi-card-support.ts";
 import { attachToken, claudeAddress, claudeLine, inboxLine, listWithToken, post, REPLY_SOCKET, runsOf, settle, socketPath } from "./claude-inbox-support.ts";
 
 // These run the real Claude adapter in the fake mods host, the real core, and real Unix sockets
@@ -163,7 +164,10 @@ for (const to of ["codex", "pi"] as Harness[]) {
         await eventually(agent.incoming, texts => expect(texts).toHaveLength(count + 1));
         const row = rig.rows().find(r => r.id === msg_id)!;
         expect(row).toMatchObject({ sender: claude.agent.id, recipient: agent.agent.id, body });
-        expect(agent.incoming()[count]).toBe(wrapper(rig, claude, msg_id));
+        // Pi shows the comms card's Markdown (ADR-017); other harnesses keep the wrapper.
+        expect(agent.incoming()[count]).toBe(agent.harness === "pi"
+          ? expectedContent({ name: claude.agent.name, harness: "claude", cwd: claude.agent.cwd, id: msg_id, body, ...(row.reply_to ? { reply_to: row.reply_to } : {}) })
+          : wrapper(rig, claude, msg_id));
         await rig.state(msg_id, "acked");
         return row;
       };
