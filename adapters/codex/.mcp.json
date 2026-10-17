@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "comms": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/comms",
-      "args": ["mcp"]
+      "command": "/bin/sh",
+      "args": ["-c", "exec ./bin/comms mcp"],
+      "cwd": "."
     }
   }
 }
