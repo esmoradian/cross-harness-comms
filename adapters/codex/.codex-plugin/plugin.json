@@ -1,6 +1,6 @@
 {
   "name": "cross-harness-comms",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Discover and message agents across coding harnesses.",
   "mcpServers": "./.mcp.json",
   "hooks": "./hooks/hooks.json"

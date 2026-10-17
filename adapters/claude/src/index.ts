@@ -194,14 +194,17 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     if (!original || typeof original.listing !== "string") return native;
     // Native peer messaging lists Claude peers by short refs rather than session IDs,
     // so when it is on, Claude peers stay native and only other harnesses are added.
-    const nativePeers = /^Peer sessions \(\d+\):/m.test(original.listing);
+    const header = /^Peer sessions \((\d+)\):/m;
+    const nativePeers = header.test(original.listing);
     const extra = result.agents.filter(a => a.harness !== "claude" || (!nativePeers && a.session_key !== sessionId))
-      .map(a => a.claude_address
-        // On the native route, Claude sends to a reply socket with its own SendMessage.
-        ? `  ${a.name}  ·  ${a.harness}  ·  ${a.online ? "online" : "offline"}  ·  ${a.cwd}  ·  send to ${a.claude_address}`
+      // Under the native header, rows match native peers; on the native route, Claude
+      // sends to a reply socket with its own SendMessage.
+      .map(a => nativePeers
+        ? `  ${a.name}  ·  ${a.harness}  ·  ${a.online ? "online" : "offline"}  ·  ${a.cwd}  ·  send to ${a.claude_address ?? `comms:${a.name}`}`
         : `comms:${a.name} (${a.harness}, ${a.online ? "online" : "offline"}, ${a.cwd})`);
     if (!extra.length) return native;
-    return { result: { ...original, listing: original.listing + "\n" + extra.join("\n") } };
+    const listing = original.listing.replace(header, (_, count: string) => `Peer sessions (${Number(count) + extra.length}):`);
+    return { result: { ...original, listing: listing + "\n" + extra.join("\n") } };
   });
   return { close };
 }
