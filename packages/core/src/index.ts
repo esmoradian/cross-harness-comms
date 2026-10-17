@@ -49,9 +49,6 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       reply_to TEXT REFERENCES messages(id), body TEXT NOT NULL, created_at TEXT NOT NULL,
       state TEXT NOT NULL CHECK(state IN ('queued','delivered','acked')));
     CREATE INDEX IF NOT EXISTS mailbox ON messages(recipient, state);`);
-  // Narrow upgrade for databases made by the first local prototype.
-  if (!(db.query("PRAGMA table_info(agents)").all() as { name: string }[]).some(column => column.name === "token_hash"))
-    db.exec("ALTER TABLE agents ADD COLUMN token_hash TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS agent_token ON agents(token_hash)");
   const hash = (token: string) => createHash("sha256").update(token).digest("hex");
   const pingTimeoutMs = options.pingTimeoutMs ?? 2000;
