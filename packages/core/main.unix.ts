@@ -10,7 +10,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   const compiled = import.meta.path.includes("$bunfs");
   try {
     return await runCli(argv, {
-      stdin: process.stdin as unknown as AsyncIterable<string>,
+      // A terminal supplies no JSON, so `comms list` typed by a person does not wait for input.
+      stdin: process.stdin.isTTY ? (async function* () {})() : process.stdin as unknown as AsyncIterable<string>,
       stdout: text => { process.stdout.write(text); }, stderr: text => { process.stderr.write(text); }, signal: abort.signal,
     }, {
       platform: createUnixPlatform(), compiled,

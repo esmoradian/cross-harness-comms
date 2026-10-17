@@ -1,5 +1,5 @@
 // The release version of the core, CLI, and plugins; `comms ensure` replaces only an older core.
-export const RELEASE_VERSION = "0.1.4";
+export const RELEASE_VERSION = "0.1.5";
 export type Harness = "pi" | "claude" | "codex";
 
 export interface SessionRegistration {
@@ -135,14 +135,30 @@ export interface ClaudeInboxLine {
   body: string;
 }
 
+// Claude escapes only a literal closing tag in a body, as `<\/cross-session-message>`.
+// One more backslash on any `<` + backslashes + `/cross-session-message>` keeps that and makes it reversible.
+const escapeInboxBody = (body: string) => body.replace(/<(\\*)\/cross-session-message>/g, "<\\$1/cross-session-message>");
+const unescapeInboxBody = (body: string) => body.replace(/<\\(\\*)\/cross-session-message>/g, "<$1/cross-session-message>");
+const INBOX_ELEMENT = /^<cross-session-message((?: [a-z-]+="[^"]*")*)>\n([\s\S]*)\n<\/cross-session-message>$/;
+
 // Writes one inbox line, without its trailing newline, stamped as sent by this plugin.
-export function formatClaudeInboxLine(_line: { msg_id: string; from: string; from_name: string; body: string }): string {
-  throw new Error("not implemented");
+export function formatClaudeInboxLine(line: { msg_id: string; from: string; from_name: string; body: string }): string {
+  const content = `<cross-session-message from="${line.from}" from-name="${line.from_name}" from-mode="prompting">\n${escapeInboxBody(line.body)}\n</cross-session-message>`;
+  return JSON.stringify({ msgV: 1, msg_id: line.msg_id, type: "user", message: { role: "user", content }, priority: "next", from: line.from,
+    from_plugin: "cross-harness-comms" });
 }
 
 // Reads one inbox line, or returns undefined when it is not a peer-message line.
-export function parseClaudeInboxLine(_line: string): ClaudeInboxLine | undefined {
-  throw new Error("not implemented");
+export function parseClaudeInboxLine(line: string): ClaudeInboxLine | undefined {
+  let value: { msgV?: unknown; msg_id?: unknown; type?: unknown; from?: unknown; message?: { role?: unknown; content?: unknown } };
+  try { value = JSON.parse(line); } catch { return undefined; }
+  if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.msgV !== "number" || typeof value.msg_id !== "string"
+    || !value.msg_id || typeof value.from !== "string" || value.type !== "user" || value.message?.role !== "user"
+    || typeof value.message.content !== "string") return undefined;
+  const element = INBOX_ELEMENT.exec(value.message.content);
+  if (!element) return undefined;
+  const from_name = / from-name="([^"]*)"/.exec(element[1]!)?.[1] ?? "";
+  return { msgV: value.msgV, msg_id: value.msg_id, from: value.from, from_name, body: unescapeInboxBody(element[2]!) };
 }
 
 export const MAX_LINE_BYTES = 1024 * 1024;

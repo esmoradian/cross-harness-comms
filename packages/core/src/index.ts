@@ -1,10 +1,13 @@
 import type { Duplex } from "node:stream";
+import { connect, createServer, type Server, type Socket } from "node:net";
+import { rmSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { hostname } from "node:os";
 import { readPackets, writePacket, messageId } from "@cross-harness-comms/client";
 import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
+  CLAUDE_INBOX_VERSIONS, CLAUDE_NATIVE_MIN_VERSION, formatClaudeInboxLine, parseClaudeInboxLine,
   type Agent, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
 
 export interface Core {
@@ -19,8 +22,24 @@ interface Connection {
   token?: string;
   requests: Promise<void>;
   pings: Map<string, (responsive: boolean) => void>;
+  // A Claude session's inbox socket, whether the native route is on, and its unacknowledged line (ADR-016).
+  inbox?: string;
+  native?: boolean;
+  inflight?: { id: string; from: string; timer?: ReturnType<typeof setTimeout> };
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+// Claude mints its own message IDs, of any UUID version.
+const anyUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Compares a Claude version's release parts numerically; an unreadable version is unsupported.
+const nativeVersion = (version: string) => {
+  const [have, need] = [version, CLAUDE_NATIVE_MIN_VERSION].map(v => v.split(".").slice(0, 3).map(part => parseInt(part, 10))) as [number[], number[]];
+  for (let index = 0; index < 3; index++) if (have[index] !== need[index]) return have[index]! > need[index]!;
+  return true;
+};
+// A reply socket is named like Claude's `<pid>.sock`, with ten digits starting at 9 so it is never a PID,
+// and derived from the agent so its `uds:` address survives core restarts.
+const replyPath = (directory: string, agent: string) =>
+  `${directory}/9${String(parseInt(createHash("sha256").update(agent).digest("hex").slice(0, 12), 16) % 1e9).padStart(9, "0")}.sock`;
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw failure("INVALID_PARAMS", "Expected an object", -32602);
   return value as Record<string, unknown>;
@@ -73,6 +92,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   const registrations = new Map<string, Promise<unknown>>();
   const run = options.run ?? spawn;
   const codexChains = new Map<string, Promise<void>>();
+  const nativeAckMs = options.nativeAckMs ?? 5000;
+  const replyServers = new Map<string, Server>();
   // Codex threads are online from their SessionStart hook until SessionEnd or a failed delivery (ADR-014).
   const codexOnline = () => new Set((db.query("SELECT agent FROM codex_threads").all() as { agent: string }[]).map(row => row.agent));
   const agents = (): Agent[] => {
@@ -84,6 +105,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     convert(value, policy.latest, connection.version ?? policy.latest, policy));
   const detach = (connection: Connection) => {
     connections.delete(connection);
+    clearTimeout(connection.inflight?.timer);
     for (const finish of connection.pings.values()) finish(false);
     if (connection.agent && live.get(connection.agent) === connection) {
       live.delete(connection.agent);
@@ -127,12 +149,87 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     if (message.state === "acked") return;
     const connection = live.get(message.recipient);
     if (!connection) { if (codexOnline().has(message.recipient)) deliverToCodex(message); return; }
+    if (connection.native && agents().find(a => a.id === message.sender)?.harness !== "claude") { deliverNative(connection, message); return; }
     try {
       // State is committed before writing to the stream. Reconnect retries both
       // queued and delivered records, including a write interrupted by a crash.
       db.query("UPDATE messages SET state = 'delivered' WHERE id = ? AND state = 'queued'").run(message.id);
       packet(connection, { jsonrpc: "2.0", method: "deliver", params: delivery({ ...message, state: "delivered" }) });
     } catch { detach(connection); connection.stream.destroy(); }
+  };
+  // One native line is in flight per Claude session; the next is written after its ACK (ADR-016).
+  const deliverNative = (connection: Connection, message: Message) => {
+    if (connection.inflight) return;
+    const sender = agents().find(a => a.id === message.sender)!;
+    const from = `uds:${replyPath(dirname(connection.inbox!), sender.id)}`;
+    db.query("UPDATE messages SET state = 'delivered' WHERE id = ? AND state = 'queued'").run(message.id);
+    connection.inflight = { id: message.id, from, timer: setTimeout(() => fallback(connection), nativeAckMs) };
+    let connected = false;
+    const socket = connect(connection.inbox!, () => {
+      connected = true;
+      socket.end(formatClaudeInboxLine({ msg_id: message.id, from, from_name: sender.name, body: message.body }) + "\n");
+    });
+    socket.on("error", () => { if (!connected) fallback(connection); });
+  };
+  // A missing ACK or an unreachable inbox turns the native route off for this attachment and
+  // resends everything pending as `deliver` packets. The in-flight record stays for a late ACK.
+  const fallback = (connection: Connection) => {
+    const inflight = connection.inflight;
+    if (!inflight?.timer) return;
+    clearTimeout(inflight.timer);
+    delete inflight.timer;
+    connection.native = false;
+    if (connection.agent && live.get(connection.agent) === connection) for (const message of pending(connection.agent)) deliver(message);
+  };
+  // While a native Claude session is attached, every non-Claude agent has a reply socket in its inbox directory.
+  const openReplySockets = () => {
+    const directories = new Set([...live.values()].flatMap(c => c.native && c.inbox ? [dirname(c.inbox)] : []));
+    for (const directory of directories) for (const agent of agents()) {
+      const path = replyPath(directory, agent.id);
+      if (agent.harness === "claude" || replyServers.has(path)) continue;
+      rmSync(path, { force: true });
+      const server = createServer(socket => readReplies(socket, agent.id));
+      server.on("error", () => { if (replyServers.get(path) === server) replyServers.delete(path); });
+      server.listen(path);
+      replyServers.set(path, server);
+    }
+  };
+  const readReplies = (socket: Socket, recipient: string) => {
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("error", () => {});
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      // ponytail: a line this long cannot fit the delivery limit; drop the connection rather than buffer it.
+      if (buffer.length > 2 * MAX_LINE_BYTES) { socket.destroy(); return; }
+      let end: number;
+      while ((end = buffer.indexOf("\n")) >= 0) { receiveReply(recipient, buffer.slice(0, end)); buffer = buffer.slice(end + 1); }
+    });
+    socket.on("end", () => { if (buffer) receiveReply(recipient, buffer); });
+  };
+  // A Claude session's own SendMessage to a reply socket becomes a message from its agent.
+  const receiveReply = (recipient: string, text: string) => {
+    const line = closed ? undefined : parseClaudeInboxLine(text);
+    const owner = line && [...live.values()].find(c => c.inbox && `uds:${c.inbox}` === line.from);
+    if (!line || !owner?.agent || !anyUuid.test(line.msg_id)) return;
+    if (!CLAUDE_INBOX_VERSIONS.includes(line.msgV)) owner.native = false;
+    if (db.query("SELECT id FROM messages WHERE id = ?").get(line.msg_id)) return;
+    const unanswered = db.query(`SELECT id FROM messages m WHERE sender = ? AND recipient = ?
+      AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id) ORDER BY rowid DESC LIMIT 1`).get(recipient, owner.agent) as { id: string } | null;
+    try { store(line.msg_id, owner.agent, recipient, line.body, unanswered?.id); }
+    catch { /* Over the delivery size limit: dropped. */ }
+  };
+  // Stores a new message and delivers it, refusing one whose delivery line would exceed the limit.
+  const store = (id: string, sender: string, recipient: string, body: string, reply_to?: string) => {
+    const message: Message = { id, sender, recipient, body, created_at: new Date().toISOString(), state: "queued", ...(reply_to ? { reply_to } : {}) };
+    // Reserve the longest valid sender name and persisted nullable reply field,
+    // so a later rename or replay cannot make an accepted message undeliverable.
+    const envelope = { ...delivery(message), from: "comms:" + "x".repeat(64),
+      message: { ...message, state: "delivered", reply_to: reply_to ?? null } };
+    if (Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", method: "deliver", params: envelope })) > MAX_LINE_BYTES)
+      throw failure("INVALID_MESSAGE", "Delivery line exceeds 1 MB");
+    db.query("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, sender, recipient, reply_to ?? null, body, message.created_at, message.state);
+    deliver(message);
   };
   const ping = (connection: Connection): Promise<boolean> => new Promise(resolve => {
     if (connection.stream.destroyed || connection.stream.writableEnded) { resolve(false); return; }
@@ -163,6 +260,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     const id = messageId();
     db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
       .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null);
+    if (session.harness !== "claude") openReplySockets();
     return { ...session, id, name, last_seen: now, online: true };
   };
   const codexStart = (session: SessionRegistration, executable: string): Agent => {
@@ -217,7 +315,13 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     if (method === "hello") {
       if (connection.version !== undefined) throw failure("INVALID_REQUEST", "hello already completed", -32600);
       connection.version = negotiate(params.versions as { min: number; max: number }, policy);
+      if (params.claude !== undefined) {
+        const claude = object(params.claude);
+        connection.inbox = string(claude.inbox);
+        connection.native = nativeVersion(string(claude.version));
+      }
       const agent = params.session ? await register(object(params.session) as unknown as SessionRegistration, connection, params.token) : undefined;
+      if (agent && connection.native) openReplySockets();
       const notice = policy.versions[connection.version]?.notice;
       return { version: connection.version, ...(agent ? { agent, token: connection.token } : {}), ...(notice ? { notice } : {}) };
     }
@@ -229,7 +333,13 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         return { agent: codexStart(session, string(params.executable)) };
       }
       case "codex_session_end": codexEnd(string(params.session_key)); return { ok: true };
-      case "list": return { agents: agents() };
+      case "list": {
+        // A Claude caller on the native route sees each other harness's reply socket as its address.
+        const caller = typeof params.token === "string" ? db.query("SELECT id FROM agents WHERE token_hash = ?").get(hash(params.token)) as { id: string } | null : null;
+        const connection = caller ? live.get(caller.id) : undefined;
+        const directory = connection?.native && connection.inbox ? dirname(connection.inbox) : undefined;
+        return { agents: agents().map(a => directory && a.harness !== "claude" ? { ...a, claude_address: `uds:${replyPath(directory, a.id)}` } : a) };
+      }
       case "send": {
         const sender = params.codex_thread === undefined ? authenticated(params) : codexSender(string(params.codex_thread));
         const id = string(params.id);
@@ -243,15 +353,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
             throw failure("INVALID_MESSAGE", "Message ID already belongs to different content");
           return { id, state: existing.state };
         }
-        const message: Message = { id, sender, recipient, body: params.body, created_at: new Date().toISOString(), state: "queued", ...(reply_to ? { reply_to } : {}) };
-        // Reserve the longest valid sender name and persisted nullable reply field,
-        // so a later rename or replay cannot make an accepted message undeliverable.
-        const envelope = { ...delivery(message), from: "comms:" + "x".repeat(64),
-          message: { ...message, state: "delivered", reply_to: reply_to ?? null } };
-        if (Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", method: "deliver", params: envelope })) > MAX_LINE_BYTES)
-          throw failure("INVALID_MESSAGE", "Delivery line exceeds 1 MB");
-        db.query("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, sender, recipient, reply_to ?? null, message.body, message.created_at, message.state);
-        deliver(message);
+        store(id, sender, recipient, params.body, reply_to);
         return db.query("SELECT id, state FROM messages WHERE id = ?").get(id);
       }
       case "ack": {
@@ -262,6 +364,16 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         if (message.state === "queued") throw failure("INVALID_MESSAGE", "Message has not been delivered");
         db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(id);
         return { id, state: "acked" };
+      }
+      case "native_ack": {
+        const agent = authenticated(params), from = string(params.from);
+        const connection = live.get(agent), inflight = connection?.inflight;
+        if (!connection || !inflight || inflight.from !== from) throw failure("INVALID_MESSAGE", "No native message in flight from that address");
+        clearTimeout(inflight.timer);
+        delete connection.inflight;
+        db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(inflight.id);
+        if (connection.native) for (const message of pending(agent)) deliver(message);
+        return { id: inflight.id };
       }
       case "detach": {
         const agent = authenticated(params);
@@ -358,6 +470,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       if (closed) return;
       closed = true;
       clearTimeout(codexTimer);
+      for (const server of replyServers.values()) server.close();
+      replyServers.clear();
       for (const connection of connections) { detach(connection); connection.stream.destroy(); }
       connections.clear(); live.clear(); db.close();
     },

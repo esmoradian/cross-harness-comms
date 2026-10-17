@@ -18,13 +18,15 @@ export interface CliRuntime {
   compiled?: boolean;
 }
 
-export async function readInput(io: CliIO): Promise<Record<string, unknown>> {
+// `optional` input may be empty, which reads as `{}`.
+export async function readInput(io: CliIO, optional = false): Promise<Record<string, unknown>> {
   let text = "";
   for await (const chunk of io.stdin) {
     text += chunk;
     if (Buffer.byteLength(text) > MAX_LINE_BYTES) throw new Error("Input exceeds 1 MB");
     if (text.includes("\n")) break;
   }
+  if (optional && !text.trim()) return {};
   const input: unknown = JSON.parse(text);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Expected a JSON object on stdin");
   return input as Record<string, unknown>;
@@ -38,8 +40,9 @@ Usage: comms <command>
   attach                 Register from JSON stdin and stream protocol packets
   send                   Send JSON on stdin: token, id, to, body, optional reply_to
   ack                    Acknowledge JSON on stdin: token, id
+  native-ack             Acknowledge a native Claude inbox line, JSON on stdin: token, from
   detach                 Close a session using its token on stdin
-  list                   List agents and presence as JSON
+  list                   List agents and presence as JSON; optional JSON stdin: token
   rename <address> <name> Rename an agent
   inspect <message-id>   Inspect delivery state
   status                 Show core and protocol versions
@@ -94,7 +97,7 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
       } finally { stream.destroy(); }
       return 0;
     }
-    if (!["send", "ack", "detach", "list", "rename", "inspect", "status"].includes(command)) throw new Error("Unknown command; run comms help");
+    if (!["send", "ack", "native-ack", "detach", "list", "rename", "inspect", "status"].includes(command)) throw new Error("Unknown command; run comms help");
     const client = createClient(await runtime.connect(runtime.platform.socketAddress()));
     try {
       const hello = await client.hello({ versions: VERSION_RANGE });
@@ -108,6 +111,7 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
           break;
         }
         case "ack": result = await client.request("ack", await readInput(io) as unknown as { token: string; id: string }); break;
+        case "native-ack": result = await client.request("native_ack", await readInput(io) as unknown as { token: string; from: string }); break;
         case "detach": result = await client.request("detach", await readInput(io) as unknown as { token: string }); break;
         case "rename":
           if (!argv[1] || !argv[2]) throw new Error("Usage: comms rename <address> <name>");
@@ -116,7 +120,7 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
           if (!argv[1]) throw new Error("Usage: comms inspect <message-id>");
           result = await client.request("inspect", { id: argv[1] }); break;
         case "status": result = await client.request("status", {}); break;
-        default: result = await client.request("list", {});
+        default: result = await client.request("list", await readInput(io, true));
       }
       io.stdout(JSON.stringify(result) + "\n");
       return 0;

@@ -20,6 +20,8 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
   let generation = 0;
   const pendingReplies = new Map<string, string[]>();
   const received = new Set<string>();
+  // Messages the native inbox route already delivered, so their fallback copies are only acknowledged.
+  const seenNatively = new Set<string>();
   const sends = new Map<string, Promise<unknown>>();
   let disconnect: (() => Promise<void>) | undefined;
   const close = async () => {
@@ -43,10 +45,13 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     const run = generation;
     sessionId = await $.session.id();
     if (sessionId === previousSession) token = previousToken;
-    else { pendingReplies.clear(); received.clear(); sends.clear(); }
+    else { pendingReplies.clear(); received.clear(); seenNatively.clear(); sends.clear(); }
     const session = { harness: "claude", session_key: sessionId, cwd: await $.session.cwd(), host: options.host };
     // Mods get no CLAUDE_PLUGIN_ROOT; $.plugin.root is the plugin's directory.
     if (options.binary === "comms") options.binary = `${$.plugin.root}/bin/comms`;
+    // Claude's inbox socket, which the core writes native peer lines to (ADR-016).
+    const inbox = await $.env!.get("CLAUDE_CODE_MESSAGING_SOCKET");
+    const claude = inbox ? { inbox, version: (await $.session.version!()).version } : undefined;
     const ensure = await $.process.run([options.binary, "ensure"]);
     if (ensure.exitCode) throw new Error(ensure.stderr || "comms ensure failed");
     let resolveReady!: () => void, rejectReady!: (error: unknown) => void;
@@ -54,7 +59,7 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     const attach = async () => {
       let initialized = false;
       try {
-        const child = $.process.spawn({ argv: [options.binary, "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...(token ? { token } : {}) }) + "\n" });
+        const child = $.process.spawn({ argv: [options.binary, "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...(token ? { token } : {}), ...(claude ? { claude } : {}) }) + "\n" });
         let buffer = "";
         for await (const chunk of child) {
           if (stopped || run !== generation) break;
@@ -79,6 +84,10 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
               await notice("This session connection was replaced by another attachment.");
             } else if (packet.method === "deliver") {
               const delivery = packet.params as Delivery;
+              if (seenNatively.has(delivery.message.id)) {
+                if (token && !stopped) await $.process.run([options.binary, "ack"], { stdin: JSON.stringify({ token, id: delivery.message.id }) + "\n" });
+                continue;
+              }
               // Record before starting the turn: that turn can immediately reply.
               if (!received.has(delivery.message.id)) {
                 received.add(delivery.message.id);
@@ -116,6 +125,19 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     try { $.clock!.after(0, attach); } catch { void attach(); }
     await ready;
     return next(event);
+  });
+  on("session.receive", async ($, event, next) => {
+    const queued = await next(event);
+    const origin = event.origin as { kind: string; plugin?: string };
+    if (origin.kind !== "peer" || origin.plugin !== "cross-harness-comms" || queued.consumed !== undefined || !token) return queued;
+    // The element's `from` is the reply socket the core wrote from; ACK it so the core sends the next line.
+    const from = /^<cross-session-message from="([^"]*)"/.exec(event.text)?.[1];
+    if (!from) return queued;
+    const ack = await $.process.run([options.binary, "native-ack"], { stdin: JSON.stringify({ token, from }) + "\n" }).catch(() => undefined);
+    if (ack && !ack.exitCode) {
+      try { seenNatively.add((JSON.parse(ack.stdout) as { id: string }).id); } catch { /* No ID: nothing to deduplicate. */ }
+    }
+    return queued;
   });
   on("tool.call", async ($, event, next) => {
     const command = async (name: string, params?: unknown): Promise<unknown> => {
@@ -167,14 +189,17 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     if (event.tool !== "ListAgents") return next(event);
     const native = await next(event);
     if ("deny" in native) return native;
-    const result = await command("list") as { agents: Agent[] };
+    const result = await command("list", token ? { token } : undefined) as { agents: Agent[] };
     const original = native.result as { listing?: unknown };
     if (!original || typeof original.listing !== "string") return native;
     // Native peer messaging lists Claude peers by short refs rather than session IDs,
     // so when it is on, Claude peers stay native and only other harnesses are added.
     const nativePeers = /^Peer sessions \(\d+\):/m.test(original.listing);
     const extra = result.agents.filter(a => a.harness !== "claude" || (!nativePeers && a.session_key !== sessionId))
-      .map(a => `comms:${a.name} (${a.harness}, ${a.online ? "online" : "offline"}, ${a.cwd})`);
+      .map(a => a.claude_address
+        // On the native route, Claude sends to a reply socket with its own SendMessage.
+        ? `  ${a.name}  ·  ${a.harness}  ·  ${a.online ? "online" : "offline"}  ·  ${a.cwd}  ·  send to ${a.claude_address}`
+        : `comms:${a.name} (${a.harness}, ${a.online ? "online" : "offline"}, ${a.cwd})`);
     if (!extra.length) return native;
     return { result: { ...original, listing: original.listing + "\n" + extra.join("\n") } };
   });
