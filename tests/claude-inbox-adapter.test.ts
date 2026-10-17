@@ -267,3 +267,31 @@ test("native claude: ListAgents goes back to comms addresses once the native rou
     expect(listing).not.toContain("uds:");
   }, undefined, { nativeAckMs: 50 });
 });
+
+test("native claude: SendMessage to a bare name ListAgents showed goes to that agent's address", async () => {
+  await withRig(async rig => {
+    const pi = await rig.harness("pi");
+    const { session: claude, fake } = await nativeClaude(rig);
+    fake.nativeListing = peerSessions;
+    await claude.list();
+    const address = await claudeAddress(rig, attachToken(fake), pi.agent.id);
+    await claude.send(pi.agent.name, "By name");
+    expect(fake.nativeCalls.at(-1)).toMatchObject({ tool: "SendMessage", to: address, message: "By name" });
+    // A name the listing did not show passes through untouched.
+    await claude.send("comms-test-8b", "Native peer");
+    expect(fake.nativeCalls.at(-1)).toMatchObject({ tool: "SendMessage", to: "comms-test-8b" });
+  });
+});
+
+test("native claude: once the native route is off, a bare listed name is sent through comms", async () => {
+  await withRig(async rig => {
+    const pi = await rig.harness("pi");
+    const { session: claude, fake } = await nativeClaude(rig, { version: "2.1.288" });
+    fake.nativeListing = peerSessions;
+    await claude.list();
+    const calls = fake.nativeCalls.length;
+    await claude.send(pi.agent.name, "By name through comms");
+    await eventually(pi.incoming, texts => expect(texts.at(-1)).toContain("By name through comms"));
+    expect(fake.nativeCalls.slice(calls).filter(call => call.tool === "SendMessage")).toEqual([]);
+  });
+});
