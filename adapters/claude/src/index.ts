@@ -142,9 +142,15 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: { binary: 
 }
 
 async function ensureClaude($: ClaudeAPI, state: ClaudeState, options: { binary: string; host: string }): Promise<void> {
-  const id = await $.session.id();
-  if (state.connecting) await state.connecting.catch(() => {});
-  if (!state.stopped && state.token && state.sessionId === id) return;
+  // Re-read the ID after every wait, and check then install with no await between, so only one waiter starts.
+  for (;;) {
+    const id = await $.session.id();
+    if (!state.connecting) {
+      if (!state.stopped && state.token && state.sessionId === id) return;
+      break;
+    }
+    await state.connecting.catch(() => {});
+  }
   const connecting = startClaude($, state, options);
   state.connecting = connecting;
   try { await connecting; }
