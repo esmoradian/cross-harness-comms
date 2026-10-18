@@ -1,6 +1,5 @@
 {
   "name": "cross-harness-comms",
-  "version": "0.1.18",
   "description": "Discover and message agents across coding harnesses.",
   "author": {
     "name": "esmoradian"

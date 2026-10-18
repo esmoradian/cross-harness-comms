@@ -4,6 +4,13 @@ import { RELEASE_VERSION } from "@cross-harness-comms/protocol";
 
 const root = join(import.meta.dir, "..");
 
+// Copies a plugin manifest directory and stamps the release version after `name`, so no manifest carries its own copy.
+async function copyManifest(source: string, output: string): Promise<void> {
+  await cp(source, output, { recursive: true });
+  const { name, ...rest } = await Bun.file(`${source}/plugin.json`).json();
+  await Bun.write(`${output}/plugin.json`, JSON.stringify({ name, version: RELEASE_VERSION, ...rest }, null, 2) + "\n");
+}
+
 // Bundles the Pi extension into `outdir` as `index.js`.
 export async function buildPiExtension(outdir: string): Promise<void> {
   // Pi provides pi-tui to extensions at runtime, so the card uses that copy (ADR-017).
@@ -29,12 +36,12 @@ async function main() {
       await Bun.write(`${output}/package.json`, JSON.stringify({ name: "@cross-harness-comms/pi", version: RELEASE_VERSION, type: "module",
         pi: { extensions: ["./src/index.js"] } }, null, 2) + "\n");
     } else if (harness === "claude") {
-      await cp("adapters/claude/.claude-plugin", `${output}/.claude-plugin`, { recursive: true });
+      await copyManifest("adapters/claude/.claude-plugin", `${output}/.claude-plugin`);
       await cp("adapters/claude/hooks", `${output}/hooks`, { recursive: true });
       const build = await Bun.build({ entrypoints: ["adapters/claude/src/index.ts"], outdir: `${output}/hooks`, naming: "register.js", target: "browser", format: "esm" });
       if (!build.success) throw new AggregateError(build.logs, "Claude build failed");
     } else {
-      await cp("adapters/codex/.codex-plugin", `${output}/.codex-plugin`, { recursive: true });
+      await copyManifest("adapters/codex/.codex-plugin", `${output}/.codex-plugin`);
       await cp("adapters/codex/hooks", `${output}/hooks`, { recursive: true });
       await copyFile("adapters/codex/.mcp.json", `${output}/.mcp.json`);
     }
