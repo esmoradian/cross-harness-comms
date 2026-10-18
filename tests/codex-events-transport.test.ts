@@ -1,15 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import * as daemon from "../packages/core/codex-daemon.ts";
+import { watchCodexDaemon as watch } from "../packages/core/codex-daemon.ts";
+import type { CodexEvent } from "../packages/core/codex-events.ts";
 import type { Platform } from "../packages/core/platform/platform.ts";
-import type { CodexEvent } from "./fakes/codex-events.ts";
 import { eventually } from "./helpers.ts";
-
-// Structural until the implementation exports the event transport.
-const watch = (daemon as typeof daemon & {
-  watchCodexDaemon(platform: Platform, options: { signal: AbortSignal; retryMs: number; timeoutMs: number }): AsyncIterable<CodexEvent>;
-}).watchCodexDaemon;
 
 function fixture(duringRead?: (send: (event: unknown) => void) => void) {
   const home = mkdtempSync("/tmp/cxe-");
@@ -90,5 +85,22 @@ test("codex events transport: reconnect emits disconnect and takes exactly one n
     abort.abort();
     expect((await done).done).toBe(true);
     await eventually(() => f.connections(), n => expect(n).toBe(2));
+  } finally { abort.abort(); await events?.return?.(); f.close(); }
+});
+
+test("codex events transport: a resumed thread missing from the snapshot gets one metadata read, not another catalog poll", async () => {
+  const f = fixture(), abort = new AbortController();
+  let events: AsyncIterator<CodexEvent> | undefined;
+  try {
+    events = watch(f.platform, { signal: abort.signal, retryMs: 5, timeoutMs: 200 })[Symbol.asyncIterator]();
+    await events.next();
+    f.send({ method: "thread/status/changed", params: { threadId: "resumed", status: { type: "idle" } } });
+    expect((await events.next()).value).toMatchObject({ method: "comms/daemon-discovered", executable: "/daemon/codex",
+      params: { thread: { id: "resumed", cwd: "/projects/shared" } } });
+    expect((await events.next()).value).toMatchObject({ method: "thread/status/changed", params: { threadId: "resumed" } });
+    f.send({ method: "thread/status/changed", params: { threadId: "resumed", status: { type: "active", activeFlags: [] } } });
+    expect((await events.next()).value.method).toBe("thread/status/changed");
+    expect(f.requests.filter(method => method === "thread/read")).toHaveLength(2);
+    expect(f.requests.filter(method => method === "thread/loaded/list")).toHaveLength(1);
   } finally { abort.abort(); await events?.return?.(); f.close(); }
 });
