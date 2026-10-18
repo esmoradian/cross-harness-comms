@@ -1,5 +1,5 @@
-import { createClient, messageId, type AdapterRuntime, type CommsClient } from "@cross-harness-comms/client";
-import { sendSummary, VERSION_RANGE } from "@cross-harness-comms/protocol";
+import { createClient, retryDisconnected, type AdapterRuntime, type CommsClient } from "@cross-harness-comms/client";
+import { listedAgents, messageId, sendSummary, VERSION_RANGE } from "@cross-harness-comms/protocol";
 
 export interface SessionStartInput {
   hook_event_name: "SessionStart";
@@ -39,19 +39,10 @@ export function createCodexAdapter(runtime: AdapterRuntime): CodexAdapter {
     if (hello.notice) runtime.notice(hello.notice);
     return next;
   })().catch(error => { client = undefined; throw error; });
-  // Retry one uncertain transport outcome; the caller-minted ID makes it safe.
-  const request = async <T>(call: (connection: CommsClient) => Promise<T>): Promise<T> => {
-    for (let attempt = 0; ; attempt++) {
-      if (closed) throw new Error("Adapter is closed");
-      const connection = await connect();
-      try { return await call(connection); }
-      catch (error) {
-        if (attempt || (error as { data?: { code?: string } }).data?.code !== "DISCONNECTED") throw error;
-        client = undefined;
-        await connection.close();
-      }
-    }
-  };
+  const request = <T>(call: (connection: CommsClient) => Promise<T>): Promise<T> => retryDisconnected(async () => {
+    if (closed) throw new Error("Adapter is closed");
+    return await connect();
+  }, call, async connection => { client = undefined; await connection.close(); });
   return {
     async toolsCall(call) {
       try {
@@ -62,9 +53,9 @@ export function createCodexAdapter(runtime: AdapterRuntime): CodexAdapter {
         let text: string;
         if (call.params.name === "comms_list") {
           const { agents } = await request(connection => connection.request("list", {}));
-          text = JSON.stringify(agents.map(agent => ({ ...agent, address: `comms:${agent.name}` })));
+          text = JSON.stringify(listedAgents(agents));
         } else if (call.params.name === "comms_send") {
-          const params = { codex_thread: thread, id: messageId(), to: args.to as string, body: args.text as string,
+          const params = { codex_thread: thread, id: messageId(Date.now()), to: args.to as string, body: args.text as string,
             ...(typeof args.reply_to === "string" ? { reply_to: args.reply_to } : {}) };
           const result = await request(connection => connection.request("send", params));
           if (result.notice) runtime.notice(result.notice);

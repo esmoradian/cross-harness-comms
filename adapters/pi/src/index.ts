@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { connectSession, messageId, type SessionClient } from "@cross-harness-comms/client";
+import { connectSession, type SessionClient } from "@cross-harness-comms/client";
 import { localRuntime } from "@cross-harness-comms/client/runtime";
-import { sendSummary, SEND_SCHEMA, type Harness } from "@cross-harness-comms/protocol";
+import { addressName, COMMS_TOOLS, listedAgents, messageId, sendSummary, type Harness } from "@cross-harness-comms/protocol";
 import { renderCommsMessage } from "./card.ts";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
 import type { Component } from "@earendil-works/pi-tui";
@@ -72,7 +72,7 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
     nativeId = ctx.sessionManager.getSessionId();
     session = await connectSession(runtime, { harness: "pi", session_key: nativeId, host: runtime.host, cwd: ctx.cwd }, async delivery => {
       const { message, from, harness } = delivery;
-      const name = from.replace(/^comms:/, ""), cwd = delivery.cwd ?? "";
+      const name = addressName(from), cwd = delivery.cwd ?? "";
       const details: CommsMessageDetails = { from, name, harness, cwd, id: message.id, ...(message.reply_to ? { reply_to: message.reply_to } : {}), body: message.body };
       // Pi Intercom's Markdown, without a tag or authority note; the card draws `details` (ADR-017).
       const replies = message.reply_to ? ` This replies to \`${message.reply_to}\`.` : "";
@@ -83,17 +83,15 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
   });
   pi.on("session_shutdown", close);
   pi.registerMessageRenderer("comms_message", (message, options, theme) => renderCommsMessage(message.details, options.expanded, theme));
-  for (const name of ["comms_send", "comms_list"]) pi.registerTool({
-    name, label: name === "comms_send" ? "Send agent message" : "List agents",
-    description: name === "comms_send" ? "Send to a comms address. Reply with reply_to set to the message ID." : "List cross-harness agents and their presence.",
-    parameters: name === "comms_send" ? SEND_SCHEMA : { type: "object", properties: {} },
+  for (const { name, description, inputSchema } of COMMS_TOOLS) pi.registerTool({
+    name, label: name === "comms_send" ? "Send agent message" : "List agents", description, parameters: inputSchema,
     async execute(_id, params, _signal, _onUpdate, ctx) {
       if (!session || ctx.sessionManager.getSessionId() !== nativeId) throw new Error("Session is not connected");
       const result = name === "comms_list" ? await session.list() : await session.send({
-        id: messageId(), to: params.to as string, body: params.text as string,
+        id: messageId(Date.now()), to: params.to as string, body: params.text as string,
         ...(typeof params.reply_to === "string" ? { reply_to: params.reply_to } : {}),
       });
-      const text = "agents" in result ? JSON.stringify(result.agents.map(agent => ({ ...agent, address: `comms:${agent.name}` }))) : sendSummary(result);
+      const text = "agents" in result ? JSON.stringify(listedAgents(result.agents)) : sendSummary(result);
       return { content: [{ type: "text", text }], details: result };
     },
   });

@@ -1,40 +1,16 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { watchCodexDaemon as watch } from "../packages/core/src/codex/daemon.ts";
 import type { CodexEvent } from "../packages/core/src/codex/events.ts";
-import type { Platform } from "../packages/core/src/platform/platform.ts";
+import { fakeCodexDaemon } from "./support/fakes/codex-daemon.ts";
 import { eventually } from "./support/helpers.ts";
 
+// One loaded thread, "existing"; `duringRead` runs before each thread/read answer.
 function fixture(duringRead?: (send: (event: unknown) => void) => void) {
-  const home = mkdtempSync("/tmp/cxe-");
-  mkdirSync(join(home, "app-server-control"));
-  mkdirSync(join(home, "app-server-daemon"));
-  writeFileSync(join(home, "app-server-daemon", "daemon.pid"), JSON.stringify({ pid: 4242 }));
-  const platform = { codexHome: () => home, processExecutable: async () => "/daemon/codex" } as unknown as Platform;
-  const requests: string[] = [];
-  let peer: { send(data: string): unknown; close(): unknown } | undefined;
-  let connections = 0;
-  const server = Bun.serve({
-    unix: join(home, "app-server-control", "app-server-control.sock"),
-    fetch: (request, srv) => srv.upgrade(request) ? undefined : new Response("upgrade required", { status: 426 }),
-    websocket: {
-      open(ws) { peer = ws; connections++; },
-      message(ws, raw) {
-        const request = JSON.parse(String(raw)) as { id?: number; method: string };
-        requests.push(request.method);
-        if (request.id === undefined) return;
-        const result = request.method === "initialize" ? {}
-          : request.method === "thread/loaded/list" ? { data: ["existing"], nextCursor: null }
-          : { thread: { id: "existing", cwd: "/projects/shared", parentThreadId: null, ephemeral: false, status: { type: "idle" } } };
-        if (request.method === "thread/read") duringRead?.(event => ws.send(JSON.stringify(event)));
-        ws.send(JSON.stringify({ id: request.id, result }));
-      },
-    },
+  return fakeCodexDaemon((request, send) => {
+    if (request.method === "thread/loaded/list") return { data: ["existing"], nextCursor: null };
+    duringRead?.(send);
+    return { thread: { id: "existing", cwd: "/projects/shared", parentThreadId: null, ephemeral: false, status: { type: "idle" } } };
   });
-  return { platform, requests, connections: () => connections,
-    send: (event: unknown) => peer!.send(JSON.stringify(event)), disconnect: () => peer!.close(),
-    close() { server.stop(true); rmSync(home, { recursive: true, force: true }); } };
 }
 
 test("codex events transport: one snapshot, then a persistent notification stream without snapshot polling", async () => {

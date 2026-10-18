@@ -3,7 +3,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { MAX_LINE_BYTES, VERSION_RANGE } from "@cross-harness-comms/protocol";
-import { eventually, settle, uuid } from "./support/helpers.ts";
+import { eventually, uuid } from "./support/helpers.ts";
 import { cli, registration, withRig } from "./support/rig.ts";
 import { claudeAddress, claudeLine, connectable, deliveries, inboxLine, listWithToken, nativePeer, post, REPLY_SOCKET, socketPath } from "./support/claude.ts";
 
@@ -50,13 +50,17 @@ test("native core: at most one native message is unacknowledged per session, wri
     for (const [index, id] of ids.entries()) {
       const line = await inboxLine(claude.inbox!, index);
       expect(line.msg_id).toBe(id);
-      await settle();
-      expect(claude.inbox!.lines).toHaveLength(index + 1);
+      // The core marks a message delivered before writing its line, so a line written early shows here at once.
       for (const later of ids.slice(index + 1)) expect(rig.rows().find(row => row.id === later)?.state).toBe("queued");
       const ack = await cli(rig, "native-ack", { token: claude.token, from: line.from });
       expect(JSON.parse(ack.stdout)).toEqual({ id });
       await rig.state(id, "acked");
     }
+    // A last message's line is written after every earlier one, so any extra line arrives before it.
+    const last = uuid();
+    await sender.request("send", { token: codex.token, id: last, to: `comms:${claude.agent.name}`, body: "Last" });
+    await inboxLine(claude.inbox!, ids.length);
+    expect(claude.inbox!.lines.map(line => JSON.parse(line).msg_id)).toEqual([...ids, last]);
     expect(deliveries(claude.peer)).toEqual([]);
   });
 });
@@ -177,8 +181,8 @@ test("native core: reply socket lines from unknown senders, repeated IDs, or ove
     await post(path, claudeLine({ from, body: "Once", msg_id: first }));
     const last = randomUUID();
     await post(path, claudeLine({ from, body: "Last", msg_id: last }));
-    await eventually(() => deliveries(codexPeer), list => expect(list).toHaveLength(2));
-    await settle();
+    // Each line is handled before the next is posted, so a delivery of any dropped line would arrive before Last's.
+    await eventually(() => deliveries(codexPeer), list => expect(list.at(-1)?.message.id).toBe(last));
     expect(deliveries(codexPeer).map(d => d.message.id)).toEqual([first, last]);
     expect(rig.rows().map(row => ({ id: row.id, sender: row.sender, recipient: row.recipient, body: row.body }))).toEqual([
       { id: first, sender: claude.agent.id, recipient: codex.agent.id, body: "Once" },
@@ -260,18 +264,17 @@ test("native core: a native ACK or fallback never resends a message already hand
     const id = uuid();
     await other.request("send", { token: sender.token, id, to: `comms:${claude.agent.name}`, body: "Claude to Claude through comms" });
     await eventually(() => deliveries(claude.peer), list => expect(list.map(d => d.message.id)).toEqual([id]));
-    await sendCodex("Native second");
+    const second = await sendCodex("Native second");
 
     const ack = await cli(rig, "native-ack", { token: claude.token, from: line.from });
     expect(JSON.parse(ack.stdout)).toEqual({ id: first });
     await inboxLine(claude.inbox!, 1);
-    await settle();
-    expect(deliveries(claude.peer).map(d => d.message.id)).toEqual([id]);
 
-    // The second line is never acknowledged, so the fallback resends it, and only it.
-    const fallback = await eventually(() => deliveries(claude.peer), list => expect(list).toHaveLength(2));
-    expect(fallback[1]!.message.body).toBe("Native second");
-    await settle();
-    expect(deliveries(claude.peer).map(d => d.message.id).filter(m => m === id)).toHaveLength(1);
+    // The second line is never acknowledged, so the fallback resends it, and only it. A message sent after
+    // the fallback arrives as a packet after everything the ACK or the fallback could resend.
+    await eventually(() => deliveries(claude.peer), list => expect(list.map(d => d.message.id)).toContain(second));
+    const third = await sendCodex("After the fallback");
+    const all = await eventually(() => deliveries(claude.peer), list => expect(list.map(d => d.message.id)).toContain(third));
+    expect(all.map(d => d.message.id)).toEqual([id, second, third]);
   }, undefined, { nativeAckMs: 200 });
 });

@@ -3,18 +3,14 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { createClient } from "@cross-harness-comms/client";
-import { RELEASE_VERSION, VERSION_RANGE } from "@cross-harness-comms/protocol";
+import { RELEASE_VERSION, VERSION_RANGE, compareVersions } from "@cross-harness-comms/protocol";
 import { createCore } from "./core.ts";
 import { watchCodexDaemon } from "./codex/daemon.ts";
-import type { CliIO, CliRuntime } from "./cli.ts";
+import type { CommandIO } from "@cross-harness-comms/client";
+import type { CliRuntime } from "./cli.ts";
 
 export const CORE_VERSION = RELEASE_VERSION;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-const compare = (a: string, b: string) => {
-  const left = a.split(".").map(Number), right = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return (left[i] ?? 0) - (right[i] ?? 0);
-  return 0;
-};
 async function directory(runtime: CliRuntime) {
   const path = runtime.platform.dataDirectory();
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -63,7 +59,7 @@ export async function ensure(runtime: CliRuntime): Promise<string> {
     const metadata = join(path, "installed-version");
     if (runtime.compiled) {
       const version = await readFile(metadata, "utf8").catch(() => "0.0.0");
-      if (compare(CORE_VERSION, version.trim()) > 0) {
+      if (compareVersions(CORE_VERSION, version.trim()) > 0) {
         const temporary = installed + ".new";
         await copyFile(command[0]!, temporary);
         await chmod(temporary, 0o700);
@@ -74,7 +70,7 @@ export async function ensure(runtime: CliRuntime): Promise<string> {
     }
     const installedVersion = runtime.compiled ? (await readFile(metadata, "utf8")).trim() : CORE_VERSION;
     const running = await probe(runtime).catch(() => undefined);
-    if (running && compare(running.version, installedVersion) >= 0) return runtime.platform.socketAddress();
+    if (running && compareVersions(running.version, installedVersion) >= 0) return runtime.platform.socketAddress();
     if (running) {
       const client = createClient(await runtime.connect(runtime.platform.socketAddress()));
       try { await client.hello({ versions: VERSION_RANGE }); await client.request("shutdown", {}); }
@@ -89,14 +85,14 @@ export async function ensure(runtime: CliRuntime): Promise<string> {
     } finally { await log.close(); }
     for (let i = 0; i < 150; i++) {
       const ready = await probe(runtime).catch(() => undefined);
-      if (ready && compare(ready.version, installedVersion) >= 0) return runtime.platform.socketAddress();
+      if (ready && compareVersions(ready.version, installedVersion) >= 0) return runtime.platform.socketAddress();
       await sleep(20);
     }
     throw new Error("Core failed to start; inspect core.log in the data directory");
   } finally { await unlock(); }
 }
 
-export async function serve(io: CliIO, runtime: CliRuntime): Promise<number> {
+export async function serve(io: CommandIO, runtime: CliRuntime): Promise<number> {
   const path = await directory(runtime);
   const unlock = await lock(join(path, "serve.lock"));
   let core: ReturnType<typeof createCore> | undefined;

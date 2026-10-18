@@ -1,14 +1,12 @@
 import type { Duplex } from "node:stream";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createClient, readPackets, writePacket } from "@cross-harness-comms/client";
-import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type SendParams } from "@cross-harness-comms/protocol";
+import { createClient, readPackets, writePacket, type CommandIO } from "@cross-harness-comms/client";
+import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
 import { ensure, serve, CORE_VERSION } from "./lifecycle.ts";
-import { runMcp, codexHook, type CodexHost, type McpIO } from "@cross-harness-comms/codex/mcp";
+import { runMcp, codexHook, type CodexHost } from "@cross-harness-comms/codex/mcp";
 
-// `comms mcp` runs on the CLI's own stdio, so the two share one shape.
-export type CliIO = McpIO;
 export interface CliRuntime {
   platform: Platform;
   connect(address: string): Promise<Duplex>;
@@ -17,7 +15,7 @@ export interface CliRuntime {
 }
 
 // `optional` input may be empty, which reads as `{}`.
-export async function readInput(io: CliIO, optional = false): Promise<Record<string, unknown>> {
+export async function readInput(io: CommandIO, optional = false): Promise<Record<string, unknown>> {
   let text = "";
   for await (const chunk of io.stdin) {
     text += chunk;
@@ -53,11 +51,36 @@ Usage: comms <command>
   help                   Show this help
 `;
 
+// Commands forwarded to one core method, with how each reads its params, after the hello.
+type Params = (argv: readonly string[], io: CommandIO) => Promise<object>;
+const stdin: Params = (_argv, io) => readInput(io);
+const COMMANDS: Record<string, [RequestMethod, Params]> = {
+  send: ["send", async (_argv, io) => {
+    const params = await readInput(io);
+    if (typeof params.id !== "string" || !params.id) throw new Error("send requires a sender-minted id");
+    return params;
+  }],
+  ack: ["ack", stdin],
+  "native-ack": ["native_ack", stdin],
+  detach: ["detach", stdin],
+  list: ["list", (_argv, io) => readInput(io, true)],
+  resolve: ["resolve", stdin],
+  rename: ["rename", async argv => {
+    if (!argv[1] || !argv[2]) throw new Error("Usage: comms rename <address> <name>");
+    return { address: argv[1], name: argv[2] };
+  }],
+  inspect: ["inspect", async argv => {
+    if (!argv[1]) throw new Error("Usage: comms inspect <message-id>");
+    return { id: argv[1] };
+  }],
+  status: ["status", async () => ({})],
+};
+
 // Codex's standing authorization for comms replies, which its automatic review otherwise rejects (ADR-018).
 const CODEX_APPROVAL = '[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]\napproval_mode = "approve"\n';
 
 // Appends the approval section to Codex's config unless its table is already there, leaving the rest untouched.
-async function allowCodexReplies(io: CliIO, platform: Platform): Promise<void> {
+async function allowCodexReplies(io: CommandIO, platform: Platform): Promise<void> {
   const path = join(platform.codexHome(), "config.toml");
   const current = await readFile(path, "utf8").catch(() => undefined);
   if (current?.includes(CODEX_APPROVAL.split("\n")[0]!)) { io.stdout(`Comms replies are already allowed in ${path}.\n`); return; }
@@ -72,7 +95,7 @@ function codexHost(runtime: CliRuntime): CodexHost {
   return { connect: runtime.connect, ensure: () => ensure(runtime), processExecutable: pid => runtime.platform.processExecutable(pid) };
 }
 
-export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRuntime): Promise<number> {
+export async function runCli(argv: readonly string[], io: CommandIO, runtime: CliRuntime): Promise<number> {
   const command = argv[0] ?? "help";
   try {
     if (["help", "--help", "-h"].includes(command)) { io.stdout(HELP); return 0; }
@@ -122,32 +145,14 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
       } finally { stopWatching(); stream.destroy(); }
       return 0;
     }
-    if (!["send", "ack", "native-ack", "detach", "list", "resolve", "rename", "inspect", "status"].includes(command)) throw new Error("Unknown command; run comms help");
+    if (!Object.hasOwn(COMMANDS, command)) throw new Error("Unknown command; run comms help");
+    const [method, params] = COMMANDS[command]!;
     const client = createClient(await runtime.connect(runtime.platform.socketAddress()));
     try {
       const hello = await client.hello({ versions: VERSION_RANGE });
       if (hello.notice) io.stderr(hello.notice + "\n");
-      let result: unknown;
-      switch (command) {
-        case "send": {
-          const params = await readInput(io);
-          if (typeof params.id !== "string" || !params.id) throw new Error("send requires a sender-minted id");
-          result = await client.request("send", params as unknown as SendParams);
-          break;
-        }
-        case "ack": result = await client.request("ack", await readInput(io) as unknown as { token: string; id: string }); break;
-        case "native-ack": result = await client.request("native_ack", await readInput(io) as unknown as { token: string; from: string }); break;
-        case "detach": result = await client.request("detach", await readInput(io) as unknown as { token: string }); break;
-        case "resolve": result = await client.request("resolve", await readInput(io) as unknown as { token?: string; name: string; skip_claude?: boolean }); break;
-        case "rename":
-          if (!argv[1] || !argv[2]) throw new Error("Usage: comms rename <address> <name>");
-          result = await client.request("rename", { address: argv[1], name: argv[2] }); break;
-        case "inspect":
-          if (!argv[1]) throw new Error("Usage: comms inspect <message-id>");
-          result = await client.request("inspect", { id: argv[1] }); break;
-        case "status": result = await client.request("status", {}); break;
-        default: result = await client.request("list", await readInput(io, true));
-      }
+      // The core validates every request's params.
+      const result = await client.request(method, await params(argv, io) as MethodTable[RequestMethod]["params"]);
       io.stdout(JSON.stringify(result) + "\n");
       return 0;
     } finally { await client.close(); }

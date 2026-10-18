@@ -6,10 +6,9 @@ import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { basename, dirname } from "node:path";
 import { hostname } from "node:os";
 import type { CodexEvent, CodexRuntimeState, CodexThread } from "./codex/events.ts";
-export type { CodexEvent, CodexSnapshot } from "./codex/events.ts";
-import { readPackets, writePacket, messageId } from "@cross-harness-comms/client";
+import { readPackets, writePacket } from "@cross-harness-comms/client";
 import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
-  CLAUDE_INBOX_VERSIONS, CLAUDE_NATIVE_MIN_VERSION, formatClaudeInboxLine, parseClaudeInboxLine,
+  CLAUDE_INBOX_VERSIONS, CLAUDE_NATIVE_MIN_VERSION, formatClaudeInboxLine, parseClaudeInboxLine, compareVersions, messageId, splitLines,
   type Agent, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
 
 export interface Core {
@@ -33,12 +32,6 @@ interface Connection {
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Claude mints its own message IDs, of any UUID version.
 const anyUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// Compares a Claude version's release parts numerically; an unreadable version is unsupported.
-const nativeVersion = (version: string) => {
-  const [have, need] = [version, CLAUDE_NATIVE_MIN_VERSION].map(v => v.split(".").slice(0, 3).map(part => parseInt(part, 10))) as [number[], number[]];
-  for (let index = 0; index < 3; index++) if (have[index] !== need[index]) return have[index]! > need[index]!;
-  return true;
-};
 // A reply socket is named like Claude's `<pid>.sock`, with ten digits starting at 9 so it is never a PID,
 // and derived from the agent so its `uds:` address survives core restarts.
 const replyPath = (directory: string, agent: string) =>
@@ -61,7 +54,7 @@ function registration(value: unknown): SessionRegistration {
 
 export type Run = (argv: readonly string[]) => Promise<{ exitCode: number; stderr?: string }>;
 
-// ponytail: no timeout on `codex queue`; a hung command stalls only that thread's deliveries.
+// shortcut: no timeout on `codex queue`; a hung command stalls only that thread's deliveries.
 const spawn: Run = async argv => {
   const child = Bun.spawn([...argv], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
   return { exitCode: await child.exited, stderr: await new Response(child.stderr).text() };
@@ -237,10 +230,11 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     socket.on("error", () => {});
     socket.on("data", (chunk: string) => {
       buffer += chunk;
-      // ponytail: a line this long cannot fit the delivery limit; drop the connection rather than buffer it.
+      // shortcut: a line this long cannot fit the delivery limit; drop the connection rather than buffer it.
       if (buffer.length > 2 * MAX_LINE_BYTES) { socket.destroy(); return; }
-      let end: number;
-      while ((end = buffer.indexOf("\n")) >= 0) { receiveReply(recipient, buffer.slice(0, end)); buffer = buffer.slice(end + 1); }
+      const { lines, rest } = splitLines(buffer);
+      buffer = rest;
+      for (const line of lines) receiveReply(recipient, line);
     });
     socket.on("end", () => { if (buffer) receiveReply(recipient, buffer); });
   };
@@ -271,7 +265,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   };
   const ping = (connection: Connection): Promise<boolean> => new Promise(resolve => {
     if (connection.stream.destroyed || connection.stream.writableEnded) { resolve(false); return; }
-    const id = "ping:" + messageId();
+    const id = "ping:" + messageId(Date.now());
     const timer = setTimeout(() => finish(false), pingTimeoutMs);
     const finish = (responsive: boolean) => {
       if (!connection.pings.delete(id)) return;
@@ -295,7 +289,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     let name = base, suffix = 1;
     const names = new Set(agents().map(a => a.name));
     while (names.has(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
-    const id = messageId();
+    const id = messageId(Date.now());
     db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
       .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null);
     if (session.harness !== "claude") openReplySockets();
@@ -368,7 +362,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       if (params.claude !== undefined) {
         const claude = object(params.claude);
         connection.inbox = string(claude.inbox);
-        connection.native = nativeVersion(string(claude.version));
+        connection.native = compareVersions(string(claude.version), CLAUDE_NATIVE_MIN_VERSION) >= 0;
       }
       const agent = params.session ? await register(object(params.session) as unknown as SessionRegistration, connection, params.token) : undefined;
       if (agent && connection.native) openReplySockets();

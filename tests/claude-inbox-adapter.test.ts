@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { basename, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Harness, HelloParams, Message } from "@cross-harness-comms/protocol";
-import { eventually, settle, uuidV7 } from "./support/helpers.ts";
-import { helloRequests, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
+import { eventually, uuidV7 } from "./support/helpers.ts";
+import { helloRequests, receive, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 import { expectedContent } from "./support/pi-card.ts";
 import { expectedClaudeText, expectedCodexText } from "./support/text.ts";
 import { attachToken, claudeAddress, claudeLine, inboxLine, listWithToken, nativeClaude, peerSessions, post, REPLY_SOCKET, runsOf,
@@ -189,7 +189,7 @@ for (const to of ["codex", "pi"] as Harness[]) {
 
 test("native claude: session.receive passes other deliveries through untouched, and a failed native ACK does not stop ours", async () => {
   await withRig(async rig => {
-    const { fake } = await nativeClaude(rig);
+    const { session: claude, fake } = await nativeClaude(rig);
     expect(fake.calls.some(call => call.method === "on" && call.args[0] === "session.receive")).toBe(true);
     const others = [
       { origin: { kind: "peer" as const }, text: "<cross-session-message from=\"uds:/tmp/cc-socks/51904.sock\" from-name=\"Reviewer\" from-mode=\"prompting\">\nhi\n</cross-session-message>" },
@@ -209,9 +209,10 @@ test("native claude: session.receive passes other deliveries through untouched, 
     const acks = await eventually(() => fake.completedRuns.filter(run => run.argv[1] === "native-ack"), runs => expect(runs).toHaveLength(1));
     expect(JSON.parse(acks[0]!.stdin ?? "{}")).toEqual({ token: attachToken(fake), from: `uds:${rig.socketDirectory}/9000000000.sock` });
     expect(acks[0]!.result.exitCode).not.toBe(0);
-    await settle();
+    // A later comms message reaches the session through the attach, after anything those receives could have caused.
+    await receive(rig, await rig.harness("claude"), claude, "After the receives");
     expect(fake.backgroundErrors).toEqual([]);
-    expect(fake.incoming).toEqual([]);
+    expect(fake.incoming.map(input => input.text)).toEqual([expect.stringContaining("After the receives")]);
   });
 });
 

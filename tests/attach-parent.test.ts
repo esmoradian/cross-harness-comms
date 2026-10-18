@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import type { HelloResult, SessionRegistration } from "@cross-harness-comms/protocol";
 import type { FakeClaude } from "./support/fakes/claude.ts";
-import { eventually, settle } from "./support/helpers.ts";
-import { attach, cli, helloRequests, registration, withRig, type Rig } from "./support/rig.ts";
+import { eventually, uuid } from "./support/helpers.ts";
+import { attach, cli, helloRequests, receive, registration, withRig, type Rig } from "./support/rig.ts";
 
 // `comms attach` exits when the process that started it is gone.
 
@@ -13,10 +13,20 @@ async function hello(child: ReturnType<typeof attach>): Promise<HelloResult> {
 }
 
 // Whether a promise settles within a generous bound, without depending on any real parent check.
-const within = (promise: Promise<unknown>, ms = 1000) => Promise.race([promise.then(() => true), Bun.sleep(ms).then(() => false)]);
+const within = (promise: Promise<unknown>) => Promise.race([promise.then(() => true), Bun.sleep(1000).then(() => false)]);
 
 async function online(rig: Rig, session: SessionRegistration) {
   return (await rig.agents()).find(agent => agent.session_key === session.session_key)?.online;
+}
+
+// Only a running attach prints a message sent to its session, so this cannot pass after an early exit.
+async function delivered(rig: Rig, child: ReturnType<typeof attach>, session: SessionRegistration) {
+  const sender = await rig.peer();
+  const { token } = await sender.register(registration("pi"));
+  const name = (await rig.agents()).find(agent => agent.session_key === session.session_key)!.name;
+  const id = uuid();
+  await sender.request("send", { token, id, to: `comms:${name}`, body: "Still attached" });
+  await eventually(child.output, output => expect(output).toContain(id));
 }
 
 test("comms attach closes its connection and exits once its parent is reported gone, and the session lists offline", async () => {
@@ -26,7 +36,7 @@ test("comms attach closes its connection and exits once its parent is reported g
     expect((await hello(child)).token).toBeString();
     expect(await online(rig, session)).toBe(true);
     const [watcher] = await eventually(() => rig.parentWatchers, watchers => expect(watchers).toHaveLength(1));
-    await settle();
+    await delivered(rig, child, session);
     expect(child.exited()).toBe(false);
 
     watcher!.gone();
@@ -45,7 +55,8 @@ test("an attach whose parent stays alive keeps running, and stops watching once 
     const second = attach(rig, detached);
     const token = (await hello(second)).token!;
     const watchers = await eventually(() => rig.parentWatchers, list => expect(list).toHaveLength(2));
-    await settle();
+    await delivered(rig, first, kept);
+    await delivered(rig, second, detached);
     expect(first.exited()).toBe(false);
     expect(second.exited()).toBe(false);
     expect(await online(rig, kept)).toBe(true);
@@ -70,7 +81,9 @@ test("a Claude session's attach exits once its parent is reported gone, and the 
     const [watcher] = await eventually(() => rig.parentWatchers, watchers => expect(watchers).toHaveLength(1));
     expect((await rig.agent("claude", claude.sessionId)).online).toBe(true);
     expect(fake.spawnResults).toHaveLength(1);
-    expect(await within(fake.spawnResults[0]!, 50)).toBe(false);
+    // A message the session receives passes through its attach, so the attach was still running then.
+    await receive(rig, await rig.harness("pi"), claude, "Still attached");
+    expect(Bun.peek.status(fake.spawnResults[0]!)).toBe("pending");
 
     watcher!.gone();
     expect(await within(fake.spawnResults[0]!)).toBe(true);

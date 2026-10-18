@@ -1,13 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Agent } from "@cross-harness-comms/protocol";
-import { codexDaemon } from "../packages/core/src/codex/daemon.ts";
-import type { Platform } from "../packages/core/src/platform/platform.ts";
+import { watchCodexDaemon } from "../packages/core/src/codex/daemon.ts";
+import type { CodexEvent } from "../packages/core/src/codex/events.ts";
 import { createCodexAdapter, type McpResult } from "../adapters/codex/src/index.ts";
 import type { PiToolResult } from "../adapters/pi/src/index.ts";
 import { FakeClaude } from "./support/fakes/claude.ts";
 import { FakeCodex } from "./support/fakes/codex.ts";
+import { fakeCodexDaemon } from "./support/fakes/codex-daemon.ts";
 import { FakeCodexEvents } from "./support/fakes/codex-events.ts";
 import { eventually, uuid } from "./support/helpers.ts";
 import { registration, withRig, type Rig } from "./support/rig.ts";
@@ -210,41 +209,32 @@ test("activity: ListAgents rows without the native header show relative activity
 
 // A stand-in for Codex's app-server daemon whose `thread/read` answers with the thread's current times,
 // as `Thread` in the generated app-server schema has them: `updatedAt`, and nullable `recencyAt`, in Unix seconds.
-test("codex daemon client: one-shot snapshots report recencyAt, or updatedAt without one, as active_at", async () => {
-  const home = mkdtempSync("/tmp/cxh-");
-  mkdirSync(join(home, "app-server-control"));
-  mkdirSync(join(home, "app-server-daemon"));
-  writeFileSync(join(home, "app-server-daemon", "daemon.pid"), JSON.stringify({ pid: 4242 }));
-  const platform = { codexHome: () => home, processExecutable: async (pid: number) => pid === 4242 ? "/daemon/codex" : undefined } as unknown as Platform;
+test("codex daemon client: each snapshot reports recencyAt, or updatedAt without one, as active_at", async () => {
   const threads: Record<string, { cwd: string; parentThreadId: null; ephemeral: false; updatedAt: number; recencyAt: number | null }> = {
     recent: { cwd: "/projects/api", parentThreadId: null, ephemeral: false, updatedAt: 1_893_456_000, recencyAt: 1_893_456_300 },
     updated: { cwd: "/projects/web", parentThreadId: null, ephemeral: false, updatedAt: 1_893_456_120, recencyAt: null },
   };
-  const server = Bun.serve({
-    unix: join(home, "app-server-control", "app-server-control.sock"),
-    fetch: (request, srv) => srv.upgrade(request) ? undefined : new Response("upgrade required", { status: 426 }),
-    websocket: {
-      message(ws, raw) {
-        const request = JSON.parse(String(raw)) as { id?: number; method: string; params?: { threadId?: string } };
-        if (request.id === undefined) return;
-        const result = request.method === "initialize" ? {}
-          : request.method === "thread/loaded/list" ? { data: Object.keys(threads), nextCursor: null }
-          : { thread: { id: request.params!.threadId!, ...threads[request.params!.threadId!] } };
-        ws.send(JSON.stringify({ id: request.id, result }));
-      },
-    },
-  });
+  const daemon = fakeCodexDaemon(request => request.method === "thread/loaded/list" ? { data: Object.keys(threads), nextCursor: null }
+    : { thread: { id: request.params!.threadId!, ...threads[request.params!.threadId!] } });
   const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const events = watchCodexDaemon(daemon.platform, { retryMs: 5, timeoutMs: 200 })[Symbol.asyncIterator]();
+  const snapshot = async () => {
+    const event = (await events.next()).value as Extract<CodexEvent, { method: "comms/daemon-snapshot" }>;
+    expect(event.method).toBe("comms/daemon-snapshot");
+    return event.params.threads;
+  };
   try {
-    const read = codexDaemon(platform);
-    const first = await read();
-    expect(first?.threads.map(t => ({ id: t.id, cwd: t.cwd, active: Date.parse(t.active_at ?? "") }))).toEqual([
+    const first = await snapshot();
+    expect(first.map(t => ({ id: t.id, cwd: t.cwd, active: Date.parse(t.active_at ?? "") }))).toEqual([
       { id: "recent", cwd: "/projects/api", active: Date.parse(iso(1_893_456_300)) },
       { id: "updated", cwd: "/projects/web", active: Date.parse(iso(1_893_456_120)) },
     ]);
     threads.recent!.recencyAt = 1_893_456_900;
     threads.updated!.updatedAt = 1_893_457_000;
-    const second = await read();
-    expect(second?.threads.map(t => Date.parse(t.active_at ?? ""))).toEqual([Date.parse(iso(1_893_456_900)), Date.parse(iso(1_893_457_000))]);
-  } finally { server.stop(true); rmSync(home, { recursive: true, force: true }); }
+    // A reconnect takes the next snapshot.
+    daemon.disconnect();
+    expect((await events.next()).value).toEqual({ method: "comms/daemon-disconnected" });
+    const second = await snapshot();
+    expect(second.map(t => Date.parse(t.active_at ?? ""))).toEqual([Date.parse(iso(1_893_456_900)), Date.parse(iso(1_893_457_000))]);
+  } finally { await events.return?.(); daemon.close(); }
 });

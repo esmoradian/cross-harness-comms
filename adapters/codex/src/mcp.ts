@@ -1,14 +1,8 @@
 import { hostname } from "node:os";
-import { createClient, type AdapterRuntime } from "@cross-harness-comms/client";
-import { RELEASE_VERSION, VERSION_RANGE, SEND_SCHEMA, MAX_LINE_BYTES } from "@cross-harness-comms/protocol";
+import { createClient, type AdapterRuntime, type CommandIO } from "@cross-harness-comms/client";
+import { RELEASE_VERSION, VERSION_RANGE, COMMS_TOOLS, MAX_LINE_BYTES, splitLines } from "@cross-harness-comms/protocol";
 import { createCodexAdapter, type McpCall, type SessionEndInput, type SessionStartInput } from "./index.ts";
 
-export interface McpIO {
-  stdin: AsyncIterable<string>;
-  stdout(text: string): void;
-  stderr(text: string): void;
-  signal: AbortSignal;
-}
 // The comms CLI supplies the core's lifecycle and platform, so this adapter never imports the core.
 export interface CodexHost extends Pick<AdapterRuntime, "ensure" | "connect"> {
   processExecutable(pid: number): Promise<string | undefined>;
@@ -31,7 +25,7 @@ export async function codexHook(hookInput: Record<string, unknown>, host: CodexH
   } finally { await client.close(); }
 }
 
-export async function runMcp(io: McpIO, host: CodexHost): Promise<number> {
+export async function runMcp(io: CommandIO, host: CodexHost): Promise<number> {
   const adapter = createCodexAdapter({ host: hostname(), connect: host.connect,
     ensure: host.ensure, notice: text => io.stderr(text + "\n") });
   let stopped = false;
@@ -42,10 +36,9 @@ export async function runMcp(io: McpIO, host: CodexHost): Promise<number> {
     let buffer = "";
     for await (const chunk of io.stdin) {
       if (stopped) break;
-      buffer += chunk;
-      let end: number;
-      while ((end = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
+      const { lines, rest } = splitLines(buffer + chunk);
+      buffer = rest;
+      for (const line of lines) {
         if (Buffer.byteLength(line) > MAX_LINE_BYTES) throw new Error("MCP line exceeds 1 MB");
         let request: { id?: string | number; method: string; params?: Record<string, unknown> };
         try { request = JSON.parse(line); }
@@ -54,10 +47,7 @@ export async function runMcp(io: McpIO, host: CodexHost): Promise<number> {
         let result: unknown;
         if (request.method === "initialize") result = { protocolVersion: request.params?.protocolVersion ?? "2024-11-05",
           capabilities: { tools: {} }, serverInfo: { name: "comms", version: RELEASE_VERSION } };
-        else if (request.method === "tools/list") result = { tools: [
-          { name: "comms_send", description: "Send a message to a comms address; use reply_to when replying.", inputSchema: SEND_SCHEMA },
-          { name: "comms_list", description: "List cross-harness agents and presence.", inputSchema: { type: "object", properties: {} } },
-        ] };
+        else if (request.method === "tools/list") result = { tools: COMMS_TOOLS };
         else if (request.method === "tools/call") result = await adapter.toolsCall(request as McpCall); else if (request.method === "ping") result = {};
         else { io.stdout(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found" } }) + "\n"); continue; }
         io.stdout(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n");

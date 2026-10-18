@@ -144,6 +144,11 @@ async function initialize(client: DaemonClient) {
     capabilities: { experimentalApi: true } });
   client.notify("initialized");
 }
+// A thread can disappear between listing or announcing and reading it.
+async function readThread(client: DaemonClient, id: string): Promise<CodexThread | undefined> {
+  const response = await client.request<{ thread: unknown }>("thread/read", { threadId: id }).catch(() => undefined);
+  return threadMetadata({ ...record(response?.thread), id });
+}
 async function snapshot(client: DaemonClient, platform: Platform): Promise<CodexSnapshot> {
   const threads: CodexThread[] = [];
   let cursor: string | null = null;
@@ -151,9 +156,7 @@ async function snapshot(client: DaemonClient, platform: Platform): Promise<Codex
   do {
     const page: { data: string[]; nextCursor: string | null } = await client.request("thread/loaded/list", cursor ? { cursor } : {});
     for (const id of page.data) {
-      // A thread can disappear between listing and reading it.
-      const response = await client.request<{ thread: unknown }>("thread/read", { threadId: id }).catch(() => undefined);
-      const thread = threadMetadata({ ...record(response?.thread), id });
+      const thread = await readThread(client, id);
       if (thread) threads.push(thread);
     }
     cursor = page.nextCursor;
@@ -162,20 +165,6 @@ async function snapshot(client: DaemonClient, platform: Platform): Promise<Codex
   } while (cursor);
   const owner = JSON.parse(await readFile(join(platform.codexHome(), "app-server-daemon", "daemon.pid"), "utf8")) as { pid: number };
   return { executable: await platform.processExecutable(owner.pid) ?? "codex", threads };
-}
-
-// One-shot metadata lookup. Production never schedules
-// it repeatedly: the persistent observer below snapshots only when connecting.
-export function codexDaemon(platform: Platform, timeoutMs = 2000): () => Promise<CodexSnapshot | undefined> {
-  return async () => {
-    let client: DaemonClient | undefined;
-    try {
-      client = await open(join(platform.codexHome(), "app-server-control", "app-server-control.sock"), timeoutMs);
-      await initialize(client);
-      return await snapshot(client, platform);
-    } catch { return undefined; }
-    finally { client?.close(); }
-  };
 }
 
 function notificationEvent(notification: Notification, executable: string): CodexEvent | undefined {
@@ -226,8 +215,7 @@ export function watchCodexDaemon(platform: Platform, options: { signal?: AbortSi
             // Resume need not emit thread/started, and it can race discovery.
             // Resolve only this event's ID, without rereading the catalog.
             const id = event.params.threadId;
-            const response = await client.request<{ thread: unknown }>("thread/read", { threadId: id }).catch(() => undefined);
-            const thread = threadMetadata({ ...record(response?.thread), id });
+            const thread = await readThread(client, id);
             if (!thread) continue;
             known.add(id);
             yield { method: "comms/daemon-discovered", executable: initial.executable, params: { thread } };

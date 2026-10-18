@@ -1,17 +1,5 @@
-import { formatMessage, VERSION_RANGE, sendSummary, type Agent, type Delivery, type HelloResult, type SendResult, type WirePacket } from "@cross-harness-comms/protocol";
+import { formatMessage, messageId, splitLines, VERSION_RANGE, sendSummary, type Agent, type Delivery, type HelloResult, type SendResult, type WirePacket } from "@cross-harness-comms/protocol";
 import type { ClaudeAPI, ClaudeOn } from "./api.ts";
-
-// Pure JavaScript plus the mod's documented random source. The timestamp is
-// supplied by $.clock.now(), so no Node APIs enter the sandbox bundle.
-function messageId(milliseconds: number): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  let timestamp = Math.floor(milliseconds);
-  for (let index = 5; index >= 0; index--) { bytes[index] = timestamp % 256; timestamp = Math.floor(timestamp / 256); }
-  bytes[6] = 0x70 | (bytes[6]! & 15);
-  bytes[8] = 0x80 | (bytes[8]! & 63);
-  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
 
 // An agent's last activity relative to now, in whole units: `active now`, then minutes, hours, and days (ADR-018).
 function activeAgo(agent: Agent, time: number): string {
@@ -88,11 +76,11 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: { binary: 
       for await (const chunk of child) {
         if (run !== state.generation) break;
         if (chunk.stream === "stderr") { await notice(chunk.text); continue; }
-        buffer += chunk.text;
-        let end: number;
-        while (run === state.generation && (end = buffer.indexOf("\n")) >= 0) {
-          const packet = JSON.parse(buffer.slice(0, end)) as WirePacket;
-          buffer = buffer.slice(end + 1);
+        const { lines, rest } = splitLines(buffer + chunk.text);
+        buffer = rest;
+        for (const line of lines) {
+          if (run !== state.generation) break;
+          const packet = JSON.parse(line) as WirePacket;
           if ("error" in packet) throw new Error(packet.error.message);
           if ("result" in packet) {
             const hello = packet.result as HelloResult;

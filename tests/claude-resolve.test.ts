@@ -3,10 +3,10 @@ import { runCli } from "@cross-harness-comms/core/cli";
 import { VERSION_RANGE, type Agent, type Harness } from "@cross-harness-comms/protocol";
 import type { ProcessRunResult, ToolEvent } from "../adapters/claude/src/api.ts";
 import type { FakeClaude } from "./support/fakes/claude.ts";
-import { eventually, settle, uuid } from "./support/helpers.ts";
+import { eventually, uuid } from "./support/helpers.ts";
 import { attachToken, claudeAddress, nativeClaude, nativePeer, peerSessions, runsOf } from "./support/claude.ts";
 import { expectedClaudeText } from "./support/text.ts";
-import { cli, registration, sendRequests, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
+import { cli, receive, registration, sendRequests, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 
 // Claude resolves every bare name through the core's `resolve`, without needing ListAgents first.
 
@@ -96,9 +96,10 @@ test("a bare Claude agent's name passes through unchanged while native peer mess
     expect(await fake.tool(event)).toBe(fake.nativeResult);
     expect(fake.nativeCalls.at(-1)).toBe(event);
     expect(resolveInputs(fake)).toEqual([expect.objectContaining({ name: peer.agent.name, skip_claude: true })]);
-    await settle();
-    expect(sendRequests(rig)).toEqual([]);
-    expect(peer.incoming()).toEqual([]);
+    // A later message to the peer through comms arrives after anything the bare name could have sent.
+    await receive(rig, claude, peer, "Through comms");
+    expect(sendRequests(rig).map(request => request.body)).toEqual(["Through comms"]);
+    expect(peer.incoming()).toEqual([expect.stringContaining("Through comms")]);
   });
 });
 

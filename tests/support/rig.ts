@@ -280,7 +280,8 @@ export function attach(rig: Rig, session: SessionRegistration, token?: string) {
     },
   }, rig.cliRuntime());
   void done.then(exitCode => { exited = true; response.resolve({ exitCode, stderr }); }, response.reject);
-  return { response: response.promise, done, exited: () => exited, abort: () => abort.abort(), async close() { abort.abort(); await done; } };
+  return { response: response.promise, done, exited: () => exited, output: () => stdout, abort: () => abort.abort(),
+    async close() { abort.abort(); await done; } };
 }
 
 export function helloRequests(rig: Rig, harness: Harness, session_key: string) {

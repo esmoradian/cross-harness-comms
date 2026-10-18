@@ -131,7 +131,7 @@ The observed SessionStart input is preserved in the local research log `/private
 Sources: the observations of Codex 0.162.1 sessions with the 0.163.0 app-server daemon on 2026-10-17 quoted in `internal/HANDOFF-CODEX.md`, and the app-server schema generated with `codex app-server generate-json-schema` from the installed Codex CLI 0.162.1 into a temporary directory, with `CODEX_HOME` pointing at a temporary path.
 
 - The queued text is checked exactly in the `codex queue --thread <id> --message <text>` argument; the fake still records arguments only.
-- `Thread` in `v2/ThreadReadResponse.json` has a required `updatedAt` and a nullable `recencyAt`, both Unix seconds ("used for thread recency ordering"); the fake daemon in `tests/activity.test.ts` answers `thread/read` with both and changes them between one-shot metadata reads.
+- `Thread` in `v2/ThreadReadResponse.json` has a required `updatedAt` and a nullable `recencyAt`, both Unix seconds ("used for thread recency ordering"); the fake daemon in `tests/support/fakes/codex-daemon.ts` answers `thread/read` with both in `tests/activity.test.ts`, which changes them between the snapshots of two connections.
 - Codex reads plugin MCP tool approval from `$CODEX_HOME/config.toml`, or `~/.codex/config.toml`, under `[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]` with `approval_mode = "approve"`, as observed; `tests/install-codex.test.ts` points both the platform's `codexHome()` and `CODEX_HOME` at a temporary directory and checks the file with Bun's built-in `Bun.TOML.parse`.
 - The other keys in the config fixtures are only content to preserve; their Codex meaning is not claimed.
 - The core's clock for activity times is the structural `now` option, epoch milliseconds, passed through the rig like `pingTimeoutMs` was.
@@ -224,5 +224,5 @@ Detaching another connection must end the owner while leaving the caller usable,
   They check committed visibility and restart persistence, not power-loss behavior or fsync policy.
 
 The native inbox and daemon transport tests listen on temporary Unix sockets.
-The fake Claude inbox and core reply sockets live in `/tmp/cc-*`, while daemon fixtures use `/tmp/cxh-*` and `/tmp/cxe-*`; each fixture removes its own directory.
+The fake Claude inbox and core reply sockets live in `/tmp/cc-*`, while the fake daemon uses `/tmp/cxd-*`; each fixture removes its own directory.
 No real harnesses, model servers, installation/download behavior, or cross-machine transports are exercised.

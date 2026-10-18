@@ -1,5 +1,4 @@
 import type { Duplex } from "node:stream";
-import { randomBytes } from "node:crypto";
 import { failure, VERSION_RANGE, type SessionRegistration, type SendParams } from "@cross-harness-comms/protocol";
 import { readPackets, writePacket } from "./wire.ts";
 export { readPackets, writePacket } from "./wire.ts";
@@ -77,14 +76,26 @@ export interface AdapterHandle {
   close(): Promise<void>;
 }
 
-// UUIDv7 without Bun globals, so the Pi package also runs under Node.
-export function messageId(): string {
-  const bytes = randomBytes(16);
-  bytes.writeUIntBE(Date.now(), 0, 6);
-  bytes[6] = 0x70 | (bytes[6]! & 15);
-  bytes[8] = 0x80 | (bytes[8]! & 63);
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+// A command's standard streams and cancellation: the comms CLI's, which `comms mcp` serves the Codex MCP server over.
+export interface CommandIO {
+  stdin: AsyncIterable<string>;
+  stdout(text: string): void;
+  stderr(text: string): void;
+  signal: AbortSignal;
+}
+
+// Retries `call` once after an uncertain transport outcome, which the caller-minted ID makes safe.
+// Application errors are definitive and must not trigger another attempt; `drop` forgets the failed connection.
+export async function retryDisconnected<C, T>(connection: () => Promise<C>, call: (connection: C) => Promise<T>,
+  drop: (connection: C) => Promise<void>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    const current = await connection();
+    try { return await call(current); }
+    catch (error) {
+      if (attempt || (error as { data?: { code?: string } }).data?.code !== "DISCONNECTED") throw error;
+      await drop(current);
+    }
+  }
 }
 
 export interface SessionClient extends AdapterHandle {
@@ -152,22 +163,14 @@ export async function connectSession(runtime: AdapterRuntime, session: SessionRe
   };
   await connect();
   return {
-    async send(params) {
-      // Retry one uncertain transport outcome, retaining the caller-minted ID.
-      // Application errors are definitive and must not trigger another attempt.
-      for (let attempt = 0; ; attempt++) {
-        const connection = await ready();
-        try {
-          const result = await connection.client.request("send", { ...params, token: connection.token });
-          if (result.notice) runtime.notice(result.notice);
-          return result;
-        } catch (error) {
-          if (attempt || (error as { data?: { code?: string } }).data?.code !== "DISCONNECTED") throw error;
-          if (current === connection) current = undefined;
-          await connection.client.close();
-        }
-      }
-    },
+    send: params => retryDisconnected(ready, async connection => {
+      const result = await connection.client.request("send", { ...params, token: connection.token });
+      if (result.notice) runtime.notice(result.notice);
+      return result;
+    }, async connection => {
+      if (current === connection) current = undefined;
+      await connection.client.close();
+    }),
     async list() {
       const result = await (await ready()).client.request("list", {});
       if (result.notice) runtime.notice(result.notice);

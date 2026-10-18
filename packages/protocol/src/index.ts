@@ -119,7 +119,7 @@ export function formatMessage(delivery: Delivery, receiver: "codex" | "claude"):
   const { message, from } = delivery;
   const hint = receiver === "codex" ? `Reply with comms_send to ${from} with reply_to ${message.id}.` : `Reply with SendMessage to ${from}.`;
   const replies = message.reply_to ? ` This replies to ${message.reply_to}.` : "";
-  return `Message from @${from.replace(/^comms:/, "")} (another agent, through comms):\n${message.body}\n\n${hint}${replies}`;
+  return `Message from @${addressName(from)} (another agent, through comms):\n${message.body}\n\n${hint}${replies}`;
 }
 
 export function resolveAddress(address: string, agents: readonly Agent[]): Agent {
@@ -213,9 +213,47 @@ export function sendSummary(result: SendResult): string {
   return result.online ?? result.state !== "queued" ? `Sent to ${name}.` : `Queued for ${name}, which is offline; it gets the message when it reconnects.`;
 }
 
-export const SEND_SCHEMA = {
-  type: "object", properties: {
-    to: { type: "string", description: "Recipient comms address" },
-    text: { type: "string" }, reply_to: { type: "string" },
-  }, required: ["to", "text"], additionalProperties: false,
-};
+// The tools Pi and Codex give their models, with one wording for both.
+export const COMMS_TOOLS = [
+  { name: "comms_send", description: "Send a message to a comms address. Reply with reply_to set to the message ID.", inputSchema: {
+    type: "object", properties: {
+      to: { type: "string", description: "Recipient comms address" },
+      text: { type: "string" }, reply_to: { type: "string" },
+    }, required: ["to", "text"], additionalProperties: false,
+  } },
+  { name: "comms_list", description: "List cross-harness agents and their presence.", inputSchema: { type: "object", properties: {} } },
+] as const;
+
+// What comms_list returns: each agent with the address to send it to.
+export const listedAgents = (agents: readonly Agent[]) => agents.map(agent => ({ ...agent, address: `comms:${agent.name}` }));
+
+// An agent's name from its `comms:` address.
+export const addressName = (address: string) => address.replace(/^comms:/, "");
+
+// A UUIDv7 from pure JavaScript and the global random source, so the Claude mod sandbox and Node can both use it.
+export function messageId(milliseconds: number): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let timestamp = Math.floor(milliseconds);
+  for (let index = 5; index >= 0; index--) { bytes[index] = timestamp % 256; timestamp = Math.floor(timestamp / 256); }
+  bytes[6] = 0x70 | (bytes[6]! & 15);
+  bytes[8] = 0x80 | (bytes[8]! & 63);
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+// Compares the first three numeric parts of two versions; a missing part counts as 0, and an
+// unreadable one makes the result NaN, which every comparison with 0 rejects.
+export function compareVersions(a: string, b: string): number {
+  const part = (version: string, index: number) => parseInt(version.split(".")[index] || "0", 10);
+  for (let index = 0; index < 3; index++) {
+    const difference = part(a, index) - part(b, index);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+// Splits buffered stream text into its complete lines and the unterminated rest.
+export function splitLines(buffer: string): { lines: string[]; rest: string } {
+  const lines = buffer.split("\n");
+  return { lines, rest: lines.pop()! };
+}
