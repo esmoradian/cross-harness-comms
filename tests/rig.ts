@@ -48,6 +48,9 @@ export class Rig {
   readonly databasePath = join(this.directory, "comms.sqlite");
   readonly notices: string[] = [];
   readonly runtimeCalls: string[] = [];
+  // Each `watchParent` call a CLI process made through this rig's platform: `gone()` reports its
+  // parent gone, and `stopped` is set once it stops watching. No real process tree is read.
+  readonly parentWatchers: { gone(): void; stopped: boolean }[] = [];
   readonly sessions: HarnessSession[] = [];
   private streams: Duplex[] = [];
   private handles: AdapterHandle[] = [];
@@ -154,6 +157,11 @@ export class Rig {
       processExecutable: async () => this.codexExecutable, codexHome: () => join(this.directory, "codex"),
       prepareListen: async () => { throw new Error("Unit tests must not listen"); },
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
+      watchParent: onGone => {
+        const watcher = { gone: onGone, stopped: false };
+        this.parentWatchers.push(watcher);
+        return () => { watcher.stopped = true; };
+      },
     } };
   }
   async harness(harness: Harness, sessionId = uuid(), cwd = "/projects/shared", options: { claude?: NativeClaudeOptions } = {}): Promise<HarnessSession> {

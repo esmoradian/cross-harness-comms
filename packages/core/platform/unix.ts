@@ -34,6 +34,7 @@ export function createUnixPlatform(): Platform {
     },
     async restrictAccess() { await chmod(address, 0o600); },
     codexHome: () => process.env.CODEX_HOME || join(homedir(), ".codex"),
+    watchParent() { throw new Error("not implemented"); },
     async processExecutable(pid) {
       // Linux exposes /proc; macOS and other Unix systems answer through ps.
       const fromProc = await readlink(`/proc/${pid}/exe`).catch(() => undefined);

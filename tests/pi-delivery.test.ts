@@ -58,14 +58,14 @@ for (const from of ["pi", "claude", "codex"] as Harness[]) {
 
       const header = ` From: ${name} (${from} · ${senderCwd}) `;
       expect(plain(renderLines(fake, fake.incoming[0]!.message, 120))).toEqual([
-        top(`${header} Ctrl+O expands `, 118),
-        row("Looks good to me.", 118),
+        top(header, 118),
+        row(" Looks good to me.", 118),
         row(` To reply: comms_send to comms:${name} · Reply to ${original.id.slice(0, 8)} · Ctrl+O to expand`, 118),
         bottom(118),
       ]);
       expect(plain(renderLines(fake, fake.incoming[0]!.message, 120, { expanded: true }))).toEqual([
         top(header, 118),
-        row("Looks good to me.", 118),
+        row(" Looks good to me.", 118),
         row("", 118),
         row(` To reply: comms_send to comms:${name}`, 118),
         row("", 118),

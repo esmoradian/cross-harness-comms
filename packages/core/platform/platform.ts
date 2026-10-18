@@ -8,4 +8,6 @@ export interface Platform {
   processExecutable(pid: number): Promise<string | undefined>;
   // Codex's home directory, which holds its app-server daemon socket and pid file.
   codexHome(): string;
+  // Calls `onGone` once the process that started this one is gone, and returns a function that stops watching.
+  watchParent(onGone: () => void): () => void;
 }

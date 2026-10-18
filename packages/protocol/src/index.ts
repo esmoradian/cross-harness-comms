@@ -86,6 +86,9 @@ export interface MethodTable {
   // A Claude session acknowledging the native inbox line sent from the reply socket `from` (ADR-016).
   native_ack: { params: { token: string; from: string }; result: { id: string } };
   list: { params: { token?: string }; result: { agents: Agent[]; notice?: string } };
+  // The one agent whose name is exactly `name`, with the fields `list` gives the caller, or null;
+  // `skip_claude` answers null for a Claude agent (ADR-005, additive).
+  resolve: { params: { token?: string; name: string; skip_claude?: boolean }; result: { agent: Agent | null } };
 }
 export type RequestMethod = Exclude<keyof MethodTable, "deliver">;
 export interface RpcError {

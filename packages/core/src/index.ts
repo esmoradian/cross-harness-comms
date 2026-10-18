@@ -353,6 +353,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         const directory = connection?.native && connection.inbox ? dirname(connection.inbox) : undefined;
         return { agents: agents().map(a => directory && a.harness !== "claude" ? { ...a, claude_address: `uds:${replyPath(directory, a.id)}` } : a) };
       }
+      case "resolve": throw new Error("not implemented");
       case "send": {
         const sender = params.codex_thread === undefined ? authenticated(params) : codexSender(string(params.codex_thread));
         const id = string(params.id);

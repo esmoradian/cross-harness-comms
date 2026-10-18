@@ -116,6 +116,7 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
       } finally { stream.destroy(); }
       return 0;
     }
+    if (command === "resolve") throw new Error("not implemented");
     if (!["send", "ack", "native-ack", "detach", "list", "rename", "inspect", "status"].includes(command)) throw new Error("Unknown command; run comms help");
     const client = createClient(await runtime.connect(runtime.platform.socketAddress()));
     try {

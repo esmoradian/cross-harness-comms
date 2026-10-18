@@ -32,6 +32,8 @@ Sources: the installed Pi 0.85.1 declarations in `dist/core/extensions/types.d.t
 - Widths are measured with pi-tui's own `visibleWidth`, and visible text with `stripTerminalSequences`.
 - `@earendil-works/pi-tui` 0.85.1 is a root dev dependency for types and tests; Pi provides it to extensions at runtime, so the built extension imports it instead of bundling it.
 - Pi Intercom's card draws a rounded frame with `muted` borders, a `toolTitle` header that adds ` Ctrl+O expands ` when collapsed, a `text` body, and `dim` metadata; the exact lines in the tests follow its layout with comms fields in place of Pi Intercom's.
+- Two deliberate departures from Pi Intercom, decided in `internal/HANDOFF-FIXES-2.md` fixes 2 and 3, change the expected lines: every body line starts with one space, like the header and the `dim` lines, and expanded body text wraps to the inner width minus that space; and the collapsed header drops ` Ctrl+O expands `, so the footer's `Ctrl+O to expand` is the card's only mention.
+- The padding tests use pi-tui's own `wrapTextWithAnsi` and `truncateToWidth` as the oracle for wrapped and truncated body text, since the card draws with them.
 
 ## Claude Code
 
@@ -54,6 +56,9 @@ The older temporary declaration snapshot lacks `process.spawn` and is not the bi
 - Spawn chunks are `{ stream, text }`; they are not necessarily complete protocol lines.
 - Generated globals include `crypto.getRandomValues`, `crypto.randomUUID`, and `performance.now`.
 - `$.clock.now()` returns `Promise<number>` with epoch milliseconds; `$.clock.after(delay, callback)` returns a cancellation handle.
+- `faults` makes `$.process.run` for one command answer with a given result, or reject with a given error, without running the CLI; the call is still recorded in `runs`.
+  It stands in for a `comms` binary that cannot start, fails, or prints nothing, which the generated `ProcessRunResult` and a rejected promise can express.
+- `spawnResults` keeps each spawned child's `.result` promise, so tests can tell when the `attach` child exits.
   The fake's `time`, when set, is what `$.clock.now()` resolves, so ListAgents' relative activity times are tested at exact boundaries (ADR-018).
 
 On 2026-10-17 the installed Claude Code 2.1.289 validator accepted isolated mods using `crypto.getRandomValues(new Uint8Array(16))`, `crypto.randomUUID()`, and `await $.clock.now()`.
@@ -86,6 +91,20 @@ Sources: the observations of interactive Claude Code 2.1.289 sessions on 2026-10
 - Claude's own replies are simulated by writing one line in the observed format to a reply socket and closing the connection: no `from_plugin`, and a `hop-chain` attribute whose value is a placeholder, since only its presence was observed.
 - Bodies are escaped as observed: only the literal `</cross-session-message>` becomes `<\/cross-session-message>`.
 - The fake does not implement Claude's own `SendMessage`, its rendering of peer messages, or its session registry for `ListAgents`; the native listing stays the fixed text in `nativeListing`.
+
+### Bare names (HANDOFF-FIXES-2 fix 1)
+
+- Every `SendMessage` whose `to` does not start with `comms:` or `uds:` is resolved with `comms resolve`, which reads `{ token?, name, skip_claude? }` as JSON on stdin like `comms list` and prints `{ agent }`.
+- "Native peer messaging is on" is detected as `ListAgents` detects it: a `Peer sessions (N):` section in Claude's native listing.
+  Tests that need it on run `ListAgents` first with that section in `nativeListing`, in a session that also has `CLAUDE_CODE_MESSAGING_SOCKET`, so they hold whether the adapter remembers the last listing or reads the socket; what the adapter assumes before its first `ListAgents` is not specified.
+
+## Parent watch (HANDOFF-FIXES-2 fix 4)
+
+- The platform module's `watchParent(onGone)` calls `onGone` once the process that started this one is gone and returns a function that stops watching.
+- The rig's platform records each call in `parentWatchers`; a test calls `gone()` to report the parent gone, and `stopped` shows whether the CLI stopped watching.
+  No real process tree is read and no test waits on the once-a-second check.
+- On Unix, gone means the parent PID differs from the one seen at start.
+  Checked on 2026-10-17 with Bun 1.3.13 on macOS: `process.ppid` is a getter, and a child whose parent shell exited read the shell's PID at start and `1` a second later.
 
 ## Codex
 

@@ -61,6 +61,8 @@ export class FakeClaude {
   readonly incoming: PromptInput[] = [];
   readonly runs: { argv: readonly string[]; init?: ProcessRunInit }[] = [];
   readonly spawns: ProcessSpawnRequest[] = [];
+  // Each spawned child's `.result`, in the order of `spawns`.
+  readonly spawnResults: Promise<ProcessSpawnResult>[] = [];
   readonly nativeCalls: ToolEvent[] = [];
   readonly processOutput: { stream: string; text: string; command: string }[] = [];
   readonly completedRuns: { argv: readonly string[]; stdin?: string; result: ProcessRunResult }[] = [];
@@ -81,6 +83,9 @@ export class FakeClaude {
   // When set, $.clock.now() resolves this epoch time instead of the real clock.
   time: number | undefined;
   loseNextSendReceipt = false;
+  // Commands whose $.process.run answers with this result, or rejects with this error, without running
+  // the CLI; the call is still recorded in `runs`. Keyed by the command, `argv[1]`.
+  readonly faults = new Map<string, ProcessRunResult | Error>();
   readonly backgroundErrors: unknown[] = [];
   private timers: { delay: number; callback: () => void | Promise<void>; cancelled: boolean }[] = [];
   private toolHandlers: ToolHandler[] = [];
@@ -137,6 +142,9 @@ export class FakeClaude {
         run: async (argv, init) => {
           this.calls.push({ method: "process.run", args: [argv, init] });
           this.runs.push({ argv, ...(init ? { init } : {}) });
+          const fault = this.faults.get(argv[1]!);
+          if (fault instanceof Error) throw fault;
+          if (fault) return { ...fault };
           let stdout = "", stderr = "";
           const abort = new AbortController();
           this.aborters.push(abort);
@@ -163,6 +171,7 @@ export class FakeClaude {
           const result = deferred<ProcessSpawnResult>();
           // Consumers may await .result or iterate. Both must see failures without unhandled rejections.
           void result.promise.catch(() => {});
+          this.spawnResults.push(result.promise);
           const output = (stream: "stdout" | "stderr", text: string) => {
             this.processOutput.push({ stream, text, command: request.argv[1]! });
             // Host chunks are not lines. Split through protocol field names deliberately.

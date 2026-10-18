@@ -35,6 +35,7 @@ function runtime(): CliRuntime {
       processExecutable: async () => undefined, codexHome: () => home,
       prepareListen: async () => { throw new Error("Unit tests must not listen"); },
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
+      watchParent: () => () => {},
     },
   };
 }
