@@ -97,6 +97,7 @@ export class FakeClaude {
   private classicStartHandlers: ClassicStartHandler[] = [];
   private receiveHandlers: ReceiveHandler[] = [];
   private attachHold: ReturnType<typeof deferred<void>> | undefined;
+  private runHolds = new Map<string, { entered: () => void; gate: Promise<Error | undefined> }>();
   private aborters: AbortController[] = [];
 
   // `env` is the session's environment; Claude Code sets CLAUDE_CODE_MESSAGING_SOCKET in it.
@@ -150,6 +151,13 @@ export class FakeClaude {
         run: async (argv, init) => {
           this.calls.push({ method: "process.run", args: [argv, init] });
           this.runs.push({ argv, ...(init ? { init } : {}) });
+          const hold = this.runHolds.get(argv[1]!);
+          if (hold) {
+            this.runHolds.delete(argv[1]!);
+            hold.entered();
+            const error = await hold.gate;
+            if (error) throw error;
+          }
           const fault = this.faults.get(argv[1]!);
           if (fault instanceof Error) throw fault;
           if (fault) return { ...fault };
@@ -282,6 +290,13 @@ export class FakeClaude {
     await inbox.listen();
     this.inbox = inbox;
     return inbox;
+  }
+  // Holds the next $.process.run of `command` once it is recorded in `runs`. `entered` resolves when it
+  // is held; `release()` lets it run, and `release(error)` makes it reject with `error` instead.
+  holdRun(command: string) {
+    const entered = deferred<void>(), gate = deferred<Error | undefined>();
+    this.runHolds.set(command, { entered: () => entered.resolve(), gate: gate.promise });
+    return { entered: entered.promise, release: (error?: Error) => gate.resolve(error) };
   }
   holdAttachOutput() { this.attachHold ??= deferred<void>(); }
   releaseAttachOutput() {

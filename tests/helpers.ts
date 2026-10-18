@@ -59,6 +59,9 @@ export async function eventually<T>(read: () => T | Promise<T>, check: (value: T
   }
 }
 
+// Resolves after every pending microtask has run, so callers already started reach their next real wait.
+export function settle(): Promise<void> { return new Promise(resolve => setImmediate(resolve)); }
+
 export function uuid(): string { return Bun.randomUUIDv7(); }
 export const uuidV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 

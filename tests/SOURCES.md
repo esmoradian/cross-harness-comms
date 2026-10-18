@@ -167,6 +167,11 @@ Claude lifecycle tests use the generated 2.1.289 `SessionEndInput` and `ClassicE
 `session.end` reports the old ID and reason; `classic.SessionStart` reports the replacement native ID after clear.
 The fake emits those events and changes its host session ID; registration, disconnect, tokens, and mailboxes remain product code.
 
+- `holdRun(command)` holds the next `$.process.run` of that command after recording it in `runs`, and `release(error?)` lets it run or makes it reject; the review fix 1 tests hold `ensure` to keep a start in flight.
+  A rejected run stands in for a `comms` binary that fails to start, as `faults` does.
+- `settle()` in `tests/helpers.ts` waits one macrotask, so hooks already started reach their next real wait; while `ensure` is held every other fake step is a microtask, so this is ordering, not timing.
+- Starts and attachments are counted from the `ensure` entries in `runs` and the `attach` entries in `spawns`.
+
 ## Detach
 
 `tests/detach.test.ts` uses the real client and core over the rig's in-memory streams.
