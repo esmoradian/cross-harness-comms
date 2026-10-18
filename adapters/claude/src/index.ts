@@ -24,40 +24,45 @@ function activeAgo(agent: Agent, time: number): string {
 interface ClaudeState {
   token: string | undefined;
   sessionId: string | undefined;
-  stopped: boolean;
   generation: number;
   nativePeers: boolean;
   connecting: Promise<void> | undefined;
-  disconnect: (() => Promise<void>) | undefined;
+  disconnect: ((token: string | undefined) => Promise<void>) | undefined;
   pendingReplies: Map<string, string[]>;
   received: Set<string>;
   seenNatively: Set<string>;
   sends: Map<string, Promise<unknown>>;
 }
 
+// The generation is the only ownership value. Take the credentials before awaiting, so a newer start keeps its own.
 async function closeClaude(state: ClaudeState): Promise<void> {
-  state.stopped = true;
   state.generation++;
-  await state.disconnect?.();
-  state.disconnect = undefined;
+  const { token, disconnect } = state;
   state.token = undefined;
+  state.disconnect = undefined;
+  await disconnect?.(token);
 }
 
 // Claude's validator allows passing $ only to helpers declared at module scope.
 async function startClaude($: ClaudeAPI, state: ClaudeState, options: { binary: string; host: string }): Promise<void> {
   const { pendingReplies, received, seenNatively, sends } = state;
   const previousSession = state.sessionId, previousToken = state.token;
-  await closeClaude(state);
-  state.stopped = false;
+  const closing = closeClaude(state);
+  // closeClaude bumps the generation synchronously, so this run owns the one after it.
+  const run = state.generation;
+  const owned = () => { if (run !== state.generation) throw new Error("comms session changed"); };
+  await closing;
+  owned();
   const notice = async (text: string) => {
     try { $.ui!.log(text); }
     catch { await $.prompt.submit({ text }); }
   };
-  state.disconnect = async () => {
-    if (state.token) await $.process.run([options.binary, "detach"], { stdin: JSON.stringify({ token: state.token }) + "\n" }).catch(() => {});
+  state.disconnect = async token => {
+    if (token) await $.process.run([options.binary, "detach"], { stdin: JSON.stringify({ token }) + "\n" }).catch(() => {});
   };
-  const run = state.generation;
-  state.sessionId = await $.session.id();
+  const sessionId = await $.session.id();
+  owned();
+  state.sessionId = sessionId;
   if (state.sessionId === previousSession) state.token = previousToken;
   else { pendingReplies.clear(); received.clear(); seenNatively.clear(); sends.clear(); }
   const session = { harness: "claude", session_key: state.sessionId, cwd: await $.session.cwd(), host: options.host };
@@ -65,23 +70,27 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: { binary: 
   if (options.binary === "comms") options.binary = `${$.plugin.root}/bin/comms`;
   // Claude's inbox socket, which the core writes native peer lines to (ADR-016).
   const inbox = await $.env!.get("CLAUDE_CODE_MESSAGING_SOCKET");
+  owned();
   state.nativePeers = !!inbox;
   const claude = inbox ? { inbox, version: (await $.session.version!()).version } : undefined;
   const ensure = await $.process.run([options.binary, "ensure"]);
   if (ensure.exitCode) throw new Error(ensure.stderr || "comms ensure failed");
+  owned();
   let resolveReady!: () => void, rejectReady!: (error: unknown) => void;
   const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
   const attach = async () => {
+    // A retry or first run that fires after the session changed spawns nothing.
+    if (run !== state.generation) { rejectReady(new Error("comms session changed")); return; }
     let initialized = false;
     try {
       const child = $.process.spawn({ argv: [options.binary, "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...(state.token ? { token: state.token } : {}), ...(claude ? { claude } : {}) }) + "\n" });
       let buffer = "";
       for await (const chunk of child) {
-        if (state.stopped || run !== state.generation) break;
+        if (run !== state.generation) break;
         if (chunk.stream === "stderr") { await notice(chunk.text); continue; }
         buffer += chunk.text;
         let end: number;
-        while ((end = buffer.indexOf("\n")) >= 0) {
+        while (run === state.generation && (end = buffer.indexOf("\n")) >= 0) {
           const packet = JSON.parse(buffer.slice(0, end)) as WirePacket;
           buffer = buffer.slice(end + 1);
           if ("error" in packet) throw new Error(packet.error.message);
@@ -94,13 +103,13 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: { binary: 
               resolveReady();
             }
           } else if (packet.method === "session_replaced") {
-            state.stopped = true;
+            state.generation++;
             state.token = undefined;
             await notice("This session connection was replaced by another attachment.");
           } else if (packet.method === "deliver") {
             const delivery = packet.params as Delivery;
             if (seenNatively.has(delivery.message.id)) {
-              if (state.token && !state.stopped) await $.process.run([options.binary, "ack"], { stdin: JSON.stringify({ token: state.token, id: delivery.message.id }) + "\n" });
+              if (state.token && run === state.generation) await $.process.run([options.binary, "ack"], { stdin: JSON.stringify({ token: state.token, id: delivery.message.id }) + "\n" });
               continue;
             }
             // Record before starting the turn: that turn can immediately reply.
@@ -111,26 +120,26 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: { binary: 
               pendingReplies.set(delivery.from, pending);
             }
             const accepted = await $.prompt.submit({ text: formatMessage(delivery, "claude") });
-            if (state.stopped || run !== state.generation) return;
+            if (run !== state.generation) return;
             if ("drop" in accepted) {
               received.delete(delivery.message.id);
               const pending = pendingReplies.get(delivery.from);
               const index = pending?.indexOf(delivery.message.id) ?? -1;
               if (index >= 0) pending!.splice(index, 1);
             }
-            if ("text" in accepted && state.token && !state.stopped) {
+            if ("text" in accepted && state.token) {
               const ack = await $.process.run([options.binary, "ack"], { stdin: JSON.stringify({ token: state.token, id: delivery.message.id }) + "\n" });
               if (ack.exitCode) throw new Error(ack.stderr || "Acknowledgement failed");
             }
           }
         }
       }
-      if (!initialized) throw new Error("comms attach ended before registration");
+      if (!initialized) throw new Error(run === state.generation ? "comms attach ended before registration" : "comms session changed");
     } catch (error) {
       rejectReady(error);
-      if (initialized && !state.stopped) await notice(error instanceof Error ? error.message : "comms attach failed");
+      if (initialized && run === state.generation) await notice(error instanceof Error ? error.message : "comms attach failed");
     } finally {
-      if (!state.stopped && run === state.generation) {
+      if (run === state.generation) {
         try { $.clock!.after(250, attach); } catch { /* The embedding host owns restart. */ }
       }
     }
@@ -146,7 +155,7 @@ async function ensureClaude($: ClaudeAPI, state: ClaudeState, options: { binary:
   for (;;) {
     const id = await $.session.id();
     if (!state.connecting) {
-      if (!state.stopped && state.token && state.sessionId === id) return;
+      if (state.token && state.sessionId === id) return;
       break;
     }
     await state.connecting.catch(() => {});
@@ -158,7 +167,7 @@ async function ensureClaude($: ClaudeAPI, state: ClaudeState, options: { binary:
 }
 
 export function registerClaude(on: ClaudeOn, options: { binary: string; host: string }): { close(): Promise<void> } {
-  const state: ClaudeState = { token: undefined, sessionId: undefined, stopped: false, generation: 0, nativePeers: false, connecting: undefined, disconnect: undefined,
+  const state: ClaudeState = { token: undefined, sessionId: undefined, generation: 0, nativePeers: false, connecting: undefined, disconnect: undefined,
     pendingReplies: new Map(), received: new Set(), seenNatively: new Set(), sends: new Map() };
   const { pendingReplies, seenNatively, sends } = state;
   const close = () => closeClaude(state);
@@ -176,14 +185,16 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     return next(event);
   });
   on("session.receive", async ($, event, next) => {
+    // A receive that completes after /clear must not ACK with, or record into, the replacement session.
+    const run = state.generation;
     const queued = await next(event);
     const origin = event.origin as { kind: string; plugin?: string };
-    if (origin.kind !== "peer" || origin.plugin !== "cross-harness-comms" || queued.consumed !== undefined || !state.token) return queued;
+    if (origin.kind !== "peer" || origin.plugin !== "cross-harness-comms" || queued.consumed !== undefined || !state.token || run !== state.generation) return queued;
     // The element's `from` is the reply socket the core wrote from; ACK it so the core sends the next line.
     const from = /^<cross-session-message from="([^"]*)"/.exec(event.text)?.[1];
     if (!from) return queued;
     const ack = await $.process.run([options.binary, "native-ack"], { stdin: JSON.stringify({ token: state.token, from }) + "\n" }).catch(() => undefined);
-    if (ack && !ack.exitCode) {
+    if (ack && !ack.exitCode && run === state.generation) {
       try { seenNatively.add((JSON.parse(ack.stdout) as { id: string }).id); } catch { /* No ID: nothing to deduplicate. */ }
     }
     return queued;
@@ -227,7 +238,7 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
       // different pending messages. New tool calls still mint distinct IDs.
       const previous = sends.get(address) ?? Promise.resolve();
       const send = previous.catch(() => {}).then(async () => {
-        if (state.stopped || run !== state.generation || !state.token) throw new Error("comms session changed");
+        if (run !== state.generation || !state.token) throw new Error("comms session changed");
         const pending = pendingReplies.get(address);
         const reply_to = pending?.at(-1);
         const id = messageId(await $.clock!.now());
@@ -239,7 +250,7 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
           // Retry once with the same ID, text, credentials, and correlation,
           // unless the core definitely rejected the send (exit 2).
           if ((error as { exitCode?: number }).exitCode === 2) throw error;
-          if (state.stopped || run !== state.generation) throw new Error("comms session changed");
+          if (run !== state.generation) throw new Error("comms session changed");
           result = await command("send", params) as SendResult;
         }
         if (reply_to && pending) {
