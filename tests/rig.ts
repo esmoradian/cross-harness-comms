@@ -54,9 +54,11 @@ export class Rig {
   private core: Core | undefined;
   private observer: Peer | undefined;
 
-  // Anticipatory option passed structurally; Part 2 adds it to the core's public type and implements it.
+  // `now` is the core's clock for activity times in epoch milliseconds (ADR-018), passed structurally
+  // until the implementation adds it to the core's public type.
   constructor(readonly protocol?: VersionPolicy, readonly coreOptions: {
     pingTimeoutMs?: number; codexPollMs?: number; codexDaemon?: () => Promise<CodexSnapshot | undefined>; nativeAckMs?: number;
+    now?: () => number;
   } = {}) {}
   // Real Claude names an inbox after the session's PID; these never start with 9.
   inboxPath(): string { return join(this.socketDirectory, `${20000 + this.inboxCount++}.sock`); }

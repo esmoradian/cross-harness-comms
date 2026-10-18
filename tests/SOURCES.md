@@ -54,6 +54,7 @@ The older temporary declaration snapshot lacks `process.spawn` and is not the bi
 - Spawn chunks are `{ stream, text }`; they are not necessarily complete protocol lines.
 - Generated globals include `crypto.getRandomValues`, `crypto.randomUUID`, and `performance.now`.
 - `$.clock.now()` returns `Promise<number>` with epoch milliseconds; `$.clock.after(delay, callback)` returns a cancellation handle.
+  The fake's `time`, when set, is what `$.clock.now()` resolves, so ListAgents' relative activity times are tested at exact boundaries (ADR-018).
 
 On 2026-10-17 the installed Claude Code 2.1.289 validator accepted isolated mods using `crypto.getRandomValues(new Uint8Array(16))`, `crypto.randomUUID()`, and `await $.clock.now()`.
 Separate probes using `Date.now()`, `Math.random()`, and `performance.now()` also passed validation.
@@ -99,6 +100,16 @@ The observed SessionStart input is preserved in the local research log `/private
 - Queue arguments are exactly `codex queue --thread <id> --message <text>`.
 - The fake gates process completion so tests can distinguish starting delivery from successful acceptance.
 
+### Messages, reply approval, and activity (ADR-018)
+
+Sources: the observations of Codex 0.162.1 sessions with the 0.163.0 app-server daemon on 2026-10-17 quoted in `internal/HANDOFF-CODEX.md`, and the app-server schema generated with `codex app-server generate-json-schema` from the installed Codex CLI 0.162.1 into a temporary directory, with `CODEX_HOME` pointing at a temporary path.
+
+- The queued text is checked exactly in the `codex queue --thread <id> --message <text>` argument; the fake still records arguments only.
+- `Thread` in `v2/ThreadReadResponse.json` has a required `updatedAt` and a nullable `recencyAt`, both Unix seconds ("used for thread recency ordering"); the fake daemon in `tests/activity.test.ts` answers `thread/read` with both and changes them between polls.
+- Codex reads plugin MCP tool approval from `$CODEX_HOME/config.toml`, or `~/.codex/config.toml`, under `[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]` with `approval_mode = "approve"`, as observed; `tests/install-codex.test.ts` points both the platform's `codexHome()` and `CODEX_HOME` at a temporary directory and checks the file with Bun's built-in `Bun.TOML.parse`.
+- The other keys in the config fixtures are only content to preserve; their Codex meaning is not claimed.
+- The core's clock for activity times is the structural `now` option, epoch milliseconds, passed through the rig like `pingTimeoutMs` was.
+
 The upstream [Codex dynamic MCP bridge](https://github.com/openai/codex/blob/main/codex-rs/tui/src/dynamic_tools_mcp.rs) accepts object and JSON-string turn metadata.
 This first fixture uses the object form; accepting both forms is compatible with its public `unknown` metadata value.
 Matching the hook's parent PID to the MCP parent's PID still needs a real integration probe.
@@ -111,7 +122,7 @@ The fake models that accepted design assumption without claiming the launch topo
   The adapter selects the most recent received message from that exact address that has not yet been replied to.
   A successful reply consumes that pending message once; older pending messages remain eligible, and state is separate per receiving session.
   Unmarked recipients pass through untouched.
-- Wrapper reply instructions mention setting `reply_to` only if the send tool has that field.
+- Codex's reply hint names `comms_send` and `reply_to`; Claude's fallback hint names `SendMessage` only, since the adapter fills in `reply_to` (ADR-018).
 - Claude's native listing remains text; this suite tests appending comms peers but does not fabricate native session IDs for deduplication.
 - Formatting lives in the I/O-free protocol package so Claude can share it without importing Node.
 - `hello` without `session` negotiates only and creates no agent or presence.
@@ -135,7 +146,7 @@ The fake models that accepted design assumption without claiming the launch topo
 - Unknown identity fields cannot override native session identity or token ownership.
 - Codex errors at the MCP tool boundary use `isError: true` and explain the missing `thread_id`.
 - Pi's custom message type is `comms_message`, with Markdown `content` in place of the shared wrapper (ADR-017).
-  Claude omits `asUser`; Codex has only a text queue interface, so provenance comes from the shared wrapper.
+  Claude omits `asUser`; Codex has only a text queue interface, so provenance comes from the header naming another agent (ADR-018).
 - Synthetic protocol versions 100 and 101 exercise older wire shapes while storing the canonical current message shape.
   They are fixtures, not planned release versions; production starts at version 1 with no conversion steps.
 - The SQLite assertions use the documented table and column names and stored insertion order.

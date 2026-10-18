@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { basename, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { formatMessage, type Harness, type HelloParams, type Message } from "@cross-harness-comms/protocol";
+import type { Harness, HelloParams, Message } from "@cross-harness-comms/protocol";
 import { FakeClaude } from "./fakes/claude.ts";
 import { helloRequests } from "./fixes-support.ts";
 import { eventually, uuidV7 } from "./helpers.ts";
 import { withRig, type HarnessSession, type Rig } from "./rig.ts";
 import { expectedContent } from "./pi-card-support.ts";
+import { expectedClaudeText, expectedCodexText } from "./text-support.ts";
 import { attachToken, claudeAddress, claudeLine, inboxLine, listWithToken, post, REPLY_SOCKET, runsOf, settle, socketPath } from "./claude-inbox-support.ts";
 
 // These run the real Claude adapter in the fake mods host, the real core, and real Unix sockets
@@ -19,10 +20,12 @@ async function nativeClaude(rig: Rig, options: { listen?: boolean; version?: str
   return { session, fake: session.fake as FakeClaude };
 }
 
-// The comms wrapper a message gets on the fallback path, from the stored row.
-function wrapper(rig: Rig, sender: HarnessSession, id: string) {
+// The text a message gets on the comms path, from the stored row: Claude's fallback text,
+// or Codex's when Codex receives it (ADR-018).
+function wrapper(rig: Rig, sender: HarnessSession, id: string, receiver: Harness = "claude") {
   const message = rig.rows().find(row => row.id === id)! as Message;
-  return formatMessage({ message, from: `comms:${sender.agent.name}`, harness: sender.harness });
+  const fields = { name: sender.agent.name, id: message.id, body: message.body, reply_to: message.reply_to ?? null };
+  return receiver === "codex" ? expectedCodexText(fields) : expectedClaudeText(fields);
 }
 
 function rowIds(rig: Rig) { return rig.rows().map(row => row.id); }
@@ -164,10 +167,10 @@ for (const to of ["codex", "pi"] as Harness[]) {
         await eventually(agent.incoming, texts => expect(texts).toHaveLength(count + 1));
         const row = rig.rows().find(r => r.id === msg_id)!;
         expect(row).toMatchObject({ sender: claude.agent.id, recipient: agent.agent.id, body });
-        // Pi shows the comms card's Markdown (ADR-017); other harnesses keep the wrapper.
+        // Pi shows the comms card's Markdown (ADR-017); Codex gets its Claude-style text (ADR-018).
         expect(agent.incoming()[count]).toBe(agent.harness === "pi"
           ? expectedContent({ name: claude.agent.name, harness: "claude", cwd: claude.agent.cwd, id: msg_id, body, ...(row.reply_to ? { reply_to: row.reply_to } : {}) })
-          : wrapper(rig, claude, msg_id));
+          : wrapper(rig, claude, msg_id, agent.harness));
         await rig.state(msg_id, "acked");
         return row;
       };

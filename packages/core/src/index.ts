@@ -57,7 +57,8 @@ function registration(value: unknown): SessionRegistration {
 }
 
 // What Codex's app-server daemon reports: the threads it has loaded, and its own executable.
-export interface CodexSnapshot { executable: string; threads: { id: string; cwd: string }[] }
+// `active_at` is a thread's activity time from its `recencyAt` or `updatedAt`, as an ISO 8601 time (ADR-018).
+export interface CodexSnapshot { executable: string; threads: { id: string; cwd: string; active_at?: string }[] }
 
 export type Run = (argv: readonly string[]) => Promise<{ exitCode: number; stderr?: string }>;
 

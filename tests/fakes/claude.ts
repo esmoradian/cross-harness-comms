@@ -78,6 +78,8 @@ export class FakeClaude {
   acceptGate: Promise<void> = Promise.resolve();
   nativeResult: ToolResult = { result: "native message accepted" };
   nativeListing = "Native Claude peers\nworker [native-ref]";
+  // When set, $.clock.now() resolves this epoch time instead of the real clock.
+  time: number | undefined;
   loseNextSendReceipt = false;
   readonly backgroundErrors: unknown[] = [];
   private timers: { delay: number; callback: () => void | Promise<void>; cancelled: boolean }[] = [];
@@ -105,7 +107,7 @@ export class FakeClaude {
     this.api = {
       env: { get: async name => { this.calls.push({ method: "env.get", args: [name] }); return this.env[name]; } },
       clock: {
-        now: async () => { this.calls.push({ method: "clock.now", args: [] }); return Date.now(); },
+        now: async () => { this.calls.push({ method: "clock.now", args: [] }); return this.time ?? Date.now(); },
         sleep: async (ms, options) => {
           this.calls.push({ method: "clock.sleep", args: [ms, options] });
           if (options?.signal?.aborted) throw options.signal.reason;

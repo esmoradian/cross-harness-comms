@@ -16,6 +16,8 @@ export interface Agent extends SessionRegistration {
   online: boolean;
   // Present in `list` for a non-Claude agent when the caller is a Claude session on the native route (ADR-016).
   claude_address?: string;
+  // The agent's last activity, an ISO 8601 time, in every `list` result; optional because it was added within version 1 (ADR-005, ADR-018).
+  active_at?: string;
 }
 
 export interface Message {
@@ -60,7 +62,13 @@ export interface SendParams {
   body: string;
   reply_to?: string;
 }
-export interface SendResult { id: string; state: "queued" | "delivered" | "acked"; notice?: string }
+export interface SendResult {
+  id: string;
+  state: "queued" | "delivered" | "acked";
+  notice?: string;
+  // The recipient's agent name; optional because it was added within version 1 (ADR-005, ADR-018).
+  name?: string;
+}
 export interface MethodTable {
   ping: { params: Record<string, never>; result: Record<string, never> };
   shutdown: { params: Record<string, never>; result: { ok: true } };
