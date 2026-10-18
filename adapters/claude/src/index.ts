@@ -194,6 +194,12 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     };
     if (event.tool === "SendMessage") {
       if (typeof event.to !== "string") return next(event);
+      if (event.agentId) {
+        // Internal model forks inherit tool schemas but cannot use tools. Leave
+        // their calls to Claude's permission path instead of sending as main.
+        const listed = await $.agent.list().then(agents => agents.some(agent => agent.id === event.agentId)).catch(() => false);
+        if (!listed) return next(event);
+      }
       let address = event.to;
       if (!address.startsWith("comms:") && !address.startsWith("uds:")) {
         // A bare name is looked up in the core on every call, so names the user typed or a message
