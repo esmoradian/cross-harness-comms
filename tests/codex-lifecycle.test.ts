@@ -205,3 +205,24 @@ test("codex lifecycle: subagent and ephemeral thread notifications do not create
     expect(await rig.agents()).toEqual([]);
   });
 });
+
+test("codex lifecycle: buffered statuses emitted before SessionEnd cannot masquerade as a later resume", async () => {
+  const events = new FakeCodexEvents();
+  const endedAt = Date.parse("2030-01-01T00:01:00.000Z");
+  await withRig(async rig => {
+    try {
+      const { fake, agent } = await started(rig, events);
+      await rig.hook("session-end", fake.sessionEnd());
+      const transition = async (at: number) => {
+        for (const type of ["notLoaded", "idle"] as const) {
+          await events.publish({ method: "thread/status/changed", active_at: new Date(at).toISOString(),
+            params: { threadId: fake.threadId, status: { type } } });
+        }
+      };
+      await transition(endedAt - 1000);
+      await sameSession(rig, agent, false);
+      await transition(endedAt + 1000);
+      await sameSession(rig, agent, true);
+    } finally { events.close(); }
+  }, undefined, { codexEvents: events, now: () => endedAt });
+});
