@@ -210,7 +210,7 @@ test("activity: ListAgents rows without the native header show relative activity
 
 // A stand-in for Codex's app-server daemon whose `thread/read` answers with the thread's current times,
 // as `Thread` in the generated app-server schema has them: `updatedAt`, and nullable `recencyAt`, in Unix seconds.
-test("codex daemon client: each poll reports a thread's recencyAt, or its updatedAt without one, as active_at", async () => {
+test("codex daemon client: one-shot snapshots report recencyAt, or updatedAt without one, as active_at", async () => {
   const home = mkdtempSync("/tmp/cxh-");
   mkdirSync(join(home, "app-server-control"));
   mkdirSync(join(home, "app-server-daemon"));

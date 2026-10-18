@@ -124,7 +124,7 @@ The observed SessionStart input is preserved in the local research log `/private
 Sources: the observations of Codex 0.162.1 sessions with the 0.163.0 app-server daemon on 2026-10-17 quoted in `internal/HANDOFF-CODEX.md`, and the app-server schema generated with `codex app-server generate-json-schema` from the installed Codex CLI 0.162.1 into a temporary directory, with `CODEX_HOME` pointing at a temporary path.
 
 - The queued text is checked exactly in the `codex queue --thread <id> --message <text>` argument; the fake still records arguments only.
-- `Thread` in `v2/ThreadReadResponse.json` has a required `updatedAt` and a nullable `recencyAt`, both Unix seconds ("used for thread recency ordering"); the fake daemon in `tests/activity.test.ts` answers `thread/read` with both and changes them between polls.
+- `Thread` in `v2/ThreadReadResponse.json` has a required `updatedAt` and a nullable `recencyAt`, both Unix seconds ("used for thread recency ordering"); the fake daemon in `tests/activity.test.ts` answers `thread/read` with both and changes them between one-shot metadata reads.
 - Codex reads plugin MCP tool approval from `$CODEX_HOME/config.toml`, or `~/.codex/config.toml`, under `[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]` with `approval_mode = "approve"`, as observed; `tests/install-codex.test.ts` points both the platform's `codexHome()` and `CODEX_HOME` at a temporary directory and checks the file with Bun's built-in `Bun.TOML.parse`.
 - The other keys in the config fixtures are only content to preserve; their Codex meaning is not claimed.
 - The core's clock for activity times is the structural `now` option, epoch milliseconds, passed through the rig like `pingTimeoutMs` was.
@@ -134,14 +134,14 @@ This first fixture uses the object form; accepting both forms is compatible with
 Matching the hook's parent PID to the MCP parent's PID still needs a real integration probe.
 The fake models that accepted design assumption without claiming the launch topology was verified.
 
-### Native lifecycle events (tests only)
+### Native lifecycle events
 
 Sources: Codex 0.163.0 generated `ThreadStartedNotification` and `ThreadStatusChangedNotification` schemas and the 2026-10-18 06:18 UTC observer captures summarized in `internal/VALIDATION-RESULTS-2026-10-17.md`.
 An independent daemon observer saw `thread/started` for a new unprompted thread; reopening an existing thread produced `notLoaded` then `idle` status notifications.
 
 - `tests/codex-lifecycle.test.ts` specifies the agreed core lifecycle rules without implementing them.
-- Its proposed injection point is `codexEvents: AsyncIterable<CodexEvent>` on the core options, passed through the rig structurally until the implementation declares it.
-  Entries retain native `method` and `params`; `thread/started` also carries the executable supplied by the future transport, as daemon snapshots do today.
+- Its injection point is `codexEvents: AsyncIterable<CodexEvent>` on the core options.
+  Entries retain native `method` and `params`; `thread/started` also carries the executable supplied by the transport, as daemon snapshots do today.
 - `FakeCodexEvents` is a sequential notification source with a barrier after each consumed event, not a lifecycle reducer or fake core.
   It owns no session, presence, routing, or storage behavior.
 - `thread/started` creates an identity before any hook; duplicate delivery preserves an existing identity and user-assigned name.
@@ -152,8 +152,8 @@ An independent daemon observer saw `thread/started` for a new unprompted thread;
   A subsequent observed `notLoaded` to `idle` transition represents a new load and can reactivate the same session without a first prompt.
 - A connect/reconnect snapshot recovers discovery, but cannot override an explicit end, including after core restart.
   Disconnect or absence from the next snapshot takes daemon-owned sessions offline while leaving hook-only sessions alone.
-- `tests/codex-events-transport.test.ts` specifies `watchCodexDaemon(platform, { signal, retryMs, timeoutMs })` through a structural export until implementation supplies it.
-  It uses a real temporary Unix WebSocket endpoint to check one snapshot per connection, persistent idle connections, buffered notifications during discovery, reconnect, and cancellation.
+- `tests/codex-events-transport.test.ts` specifies `watchCodexDaemon(platform, { signal, retryMs, timeoutMs })` through the exported event transport.
+  It uses a real temporary Unix WebSocket endpoint to check one snapshot per connection, persistent idle connections, buffered notifications during discovery, reconnect, cancellation, and event-triggered metadata discovery for a resumed ID absent from the snapshot.
 - Core lifecycle tests do not open real sockets or harnesses; transport tests do not run real Codex or model turns.
   Neither specifies detach behavior.
 
@@ -194,5 +194,6 @@ An independent daemon observer saw `thread/started` for a new unprompted thread;
 - The SQLite assertions use the documented table and column names and stored insertion order.
   They check committed visibility and restart persistence, not power-loss behavior or fsync policy.
 
-Only the native inbox tests listen on sockets: the fake Claude inbox and the core's reply sockets are real Unix sockets in a temporary `/tmp/cc-*` directory, removed with the rig.
+The native inbox and daemon transport tests listen on temporary Unix sockets.
+The fake Claude inbox and core reply sockets live in `/tmp/cc-*`, while daemon fixtures use `/tmp/cxh-*` and `/tmp/cxe-*`; each fixture removes its own directory.
 No real harnesses, model servers, installation/download behavior, or cross-machine transports are exercised.

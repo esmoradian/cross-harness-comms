@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { expect } from "bun:test";
-import { createCore, type Core, type CodexSnapshot } from "@cross-harness-comms/core";
+import { createCore, type Core } from "@cross-harness-comms/core";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
 import type { Agent, Harness, Message, SessionRegistration, VersionPolicy, WirePacket } from "@cross-harness-comms/protocol";
@@ -61,7 +61,7 @@ export class Rig {
   // `now` is the core's clock for activity times in epoch milliseconds (ADR-018), passed structurally
   // until the implementation adds it to the core's public type.
   constructor(readonly protocol?: VersionPolicy, readonly coreOptions: {
-    pingTimeoutMs?: number; codexPollMs?: number; codexDaemon?: () => Promise<CodexSnapshot | undefined>; nativeAckMs?: number;
+    pingTimeoutMs?: number; nativeAckMs?: number;
     now?: () => number;
     codexEvents?: AsyncIterable<CodexEvent>;
   } = {}) {}

@@ -5,6 +5,8 @@ import { Database } from "bun:sqlite";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { basename, dirname } from "node:path";
 import { hostname } from "node:os";
+import type { CodexEvent, CodexRuntimeState, CodexThread } from "../codex-events.ts";
+export type { CodexEvent, CodexSnapshot } from "../codex-events.ts";
 import { readPackets, writePacket, messageId } from "@cross-harness-comms/client";
 import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
   CLAUDE_INBOX_VERSIONS, CLAUDE_NATIVE_MIN_VERSION, formatClaudeInboxLine, parseClaudeInboxLine,
@@ -56,10 +58,6 @@ function registration(value: unknown): SessionRegistration {
     host: string(fields.host), cwd: string(fields.cwd) };
 }
 
-// What Codex's app-server daemon reports: the threads it has loaded, and its own executable.
-// `active_at` is a thread's activity time from its `recencyAt` or `updatedAt`, as an ISO 8601 time (ADR-018).
-export interface CodexSnapshot { executable: string; threads: { id: string; cwd: string; active_at?: string }[] }
-
 export type Run = (argv: readonly string[]) => Promise<{ exitCode: number; stderr?: string }>;
 
 // ponytail: no timeout on `codex queue`; a hung command stalls only that thread's deliveries.
@@ -69,7 +67,7 @@ const spawn: Run = async argv => {
 };
 
 export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number; run?: Run;
-  codexDaemon?: () => Promise<CodexSnapshot | undefined>; codexPollMs?: number; nativeAckMs?: number; now?: () => number }): Core {
+  codexEvents?: AsyncIterable<CodexEvent>; nativeAckMs?: number; now?: () => number }): Core {
   const policy = options.protocol ?? DEFAULT_POLICY;
   const now = options.now ?? Date.now;
   const db = new Database(options.databasePath, { create: true });
@@ -83,7 +81,15 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       reply_to TEXT REFERENCES messages(id), body TEXT NOT NULL, created_at TEXT NOT NULL,
       state TEXT NOT NULL CHECK(state IN ('queued','delivered','acked')));
     CREATE INDEX IF NOT EXISTS mailbox ON messages(recipient, state);
-    CREATE TABLE IF NOT EXISTS codex_threads (agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS codex_threads (agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS codex_lifecycle (
+      agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL,
+      runtime_state TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, ended_at INTEGER, daemon_owned INTEGER NOT NULL DEFAULT 0);
+    INSERT OR IGNORE INTO codex_lifecycle (agent, executable, runtime_state)
+      SELECT agent, executable, 'unknown' FROM codex_threads;`);
+  // Daemon presence must be reconciled before dispatching mail after a restart.
+  // Hook-only sessions keep their existing restart behavior.
+  if (options.codexEvents) db.exec("DELETE FROM codex_threads WHERE agent IN (SELECT agent FROM codex_lifecycle WHERE daemon_owned = 1)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS agent_token ON agents(token_hash)");
   const hash = (token: string) => createHash("sha256").update(token).digest("hex");
   const pingTimeoutMs = options.pingTimeoutMs ?? 2000;
@@ -96,7 +102,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   const codexChains = new Map<string, Promise<void>>();
   const nativeAckMs = options.nativeAckMs ?? 5000;
   const replyServers = new Map<string, Server>();
-  // Codex threads are online from their SessionStart hook until SessionEnd or a failed delivery (ADR-014).
+  // Runtime availability is separate from the durable identity and lifecycle record.
   const codexOnline = () => new Set((db.query("SELECT agent FROM codex_threads").all() as { agent: string }[]).map(row => row.agent));
   // Each agent's last activity in epoch milliseconds, kept in memory only; it never moves backward (ADR-018).
   const activity = new Map<string, number>();
@@ -291,16 +297,26 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     if (session.harness !== "claude") openReplySockets();
     return { ...session, id, name, last_seen: now, online: true };
   };
+  const codexActivate = (agent: Agent, executable: string) => {
+    db.query("INSERT OR REPLACE INTO codex_threads (agent, executable) VALUES (?, ?)").run(agent.id, executable);
+    for (const message of pending(agent.id)) deliverToCodex(message);
+  };
   const codexStart = (session: SessionRegistration, executable: string): Agent => {
     const agent = upsert(session);
     touch(agent.id);
-    db.query("INSERT OR REPLACE INTO codex_threads (agent, executable) VALUES (?, ?)").run(agent.id, executable);
-    for (const message of pending(agent.id)) deliverToCodex(message);
+    db.query(`INSERT INTO codex_lifecycle (agent, executable, runtime_state) VALUES (?, ?, 'idle')
+      ON CONFLICT(agent) DO UPDATE SET executable = excluded.executable, runtime_state = 'idle', ended = 0, ended_at = NULL`).run(agent.id, executable);
+    codexActivate(agent, executable);
     return agent;
   };
-  const codexEnd = (thread: string) => {
+  const codexEnd = (thread: string, ended = true, state: CodexRuntimeState = "unknown") => {
     const agent = agents().find(a => a.harness === "codex" && a.session_key === thread);
     if (!agent) return;
+    db.query(`INSERT INTO codex_lifecycle (agent, executable, runtime_state, ended, ended_at) VALUES (?, 'codex', ?, ?, ?)
+      ON CONFLICT(agent) DO UPDATE SET runtime_state = excluded.runtime_state,
+        ended = CASE WHEN excluded.ended = 1 THEN 1 ELSE codex_lifecycle.ended END,
+        ended_at = CASE WHEN excluded.ended = 1 THEN excluded.ended_at ELSE codex_lifecycle.ended_at END`)
+      .run(agent.id, state, ended ? 1 : 0, ended ? now() : null);
     db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent.id);
     db.query("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), agent.id);
   };
@@ -438,29 +454,80 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       default: throw failure("METHOD_NOT_FOUND", "Method not found", -32601);
     }
   };
-  // Interactive Codex threads load in a shared daemon before their first prompt fires
-  // SessionStart, so the core polls the daemon. It expires only threads it saw
-  // loaded; hook-registered threads of headless `codex exec` never appear there.
-  const daemonThreads = new Set<string>();
-  let codexTimer: ReturnType<typeof setTimeout> | undefined;
-  const pollCodex = async () => {
-    const snapshot = await options.codexDaemon!().catch(() => undefined);
-    if (closed) return;
-    if (snapshot) {
-      const online = codexOnline();
-      const loaded = new Set(snapshot.threads.map(thread => thread.id));
-      for (const thread of snapshot.threads) {
-        const agent = agents().find(a => a.harness === "codex" && a.session_key === thread.id);
-        const started = !agent || !online.has(agent.id)
-          ? codexStart({ harness: "codex", session_key: thread.id, host: hostname(), cwd: thread.cwd }, snapshot.executable) : agent;
-        if (thread.active_at) touch(started.id, Date.parse(thread.active_at));
-        daemonThreads.add(thread.id);
-      }
-      for (const thread of daemonThreads) if (!loaded.has(thread)) { codexEnd(thread); daemonThreads.delete(thread); }
-    }
-    codexTimer = setTimeout(() => void pollCodex(), options.codexPollMs ?? 2000);
+  type Lifecycle = { executable: string; runtime_state: CodexRuntimeState; ended: number; ended_at: number | null; daemon_owned: number };
+  const lifecycle = (agent: string) => db.query("SELECT executable, runtime_state, ended, ended_at, daemon_owned FROM codex_lifecycle WHERE agent = ?")
+    .get(agent) as Lifecycle | null;
+  const nativeActivity = (agent: string, time?: string) => {
+    if (time && Number.isFinite(Date.parse(time))) touch(agent, Date.parse(time));
   };
-  if (options.codexDaemon) void pollCodex();
+  const discoverCodex = (thread: CodexThread, executable: string, snapshot: boolean) => {
+    if (thread.parentThreadId || thread.ephemeral) return;
+    const existing = agents().find(a => a.harness === "codex" && a.session_key === thread.id);
+    const agent = existing ?? upsert({ harness: "codex", session_key: thread.id, host: hostname(), cwd: thread.cwd });
+    const previous = lifecycle(agent.id);
+    // A duplicate creation event and a recovery snapshot cannot undo an end.
+    const state = previous && (previous.ended || (!snapshot && existing)) ? previous.runtime_state : (thread.status?.type ?? "idle");
+    db.query(`INSERT INTO codex_lifecycle (agent, executable, runtime_state, daemon_owned) VALUES (?, ?, ?, 1)
+      ON CONFLICT(agent) DO UPDATE SET executable = excluded.executable, daemon_owned = 1,
+        runtime_state = CASE WHEN codex_lifecycle.ended = 1 THEN codex_lifecycle.runtime_state ELSE excluded.runtime_state END`)
+      .run(agent.id, executable, state);
+    if (!existing) touch(agent.id);
+    if (!previous?.ended && (!existing || snapshot)) {
+      if (state === "notLoaded" || state === "systemError") codexEnd(thread.id, false, state);
+      else codexActivate(agent, executable);
+    }
+    nativeActivity(agent.id, thread.active_at);
+  };
+  const daemonOffline = (except = new Set<string>()) => {
+    const owned = db.query(`SELECT a.session_key FROM codex_lifecycle c JOIN agents a ON a.id = c.agent WHERE c.daemon_owned = 1`)
+      .all() as { session_key: string }[];
+    for (const { session_key } of owned) if (!except.has(session_key)) codexEnd(session_key, false);
+  };
+  const codexEvent = (event: CodexEvent) => {
+    switch (event.method) {
+      case "thread/started": discoverCodex(event.params.thread, event.executable, false); break;
+      case "comms/daemon-discovered": discoverCodex(event.params.thread, event.executable, true); break;
+      case "comms/daemon-snapshot": {
+        const threads = event.params.threads.filter(thread => !thread.parentThreadId && !thread.ephemeral);
+        daemonOffline(new Set(threads.map(thread => thread.id)));
+        for (const thread of threads) discoverCodex(thread, event.executable, true);
+        break;
+      }
+      case "comms/daemon-disconnected": daemonOffline(); break;
+      case "thread/closed": codexEnd(event.params.threadId, false, "notLoaded"); break;
+      case "thread/archived": case "thread/deleted": codexEnd(event.params.threadId); break;
+      case "thread/status/changed": {
+        const agent = agents().find(a => a.harness === "codex" && a.session_key === event.params.threadId);
+        if (!agent) break; // A status is not a new identity or a creation event.
+        const previous = lifecycle(agent.id);
+        if (!previous) break;
+        // Native events may have waited in the transport's discovery buffer
+        // while a hook ended this session on a different core connection.
+        if (previous.ended && previous.ended_at !== null && event.active_at && Date.parse(event.active_at) <= previous.ended_at) break;
+        const state = event.params.status.type;
+        if (state === "notLoaded" || state === "systemError") { codexEnd(agent.session_key, false, state); break; }
+        const resumed = previous.runtime_state === "notLoaded" && (state === "idle" || state === "active");
+        db.query("UPDATE codex_lifecycle SET runtime_state = ?, ended = ?, ended_at = ?, daemon_owned = 1 WHERE agent = ?")
+          .run(state, resumed ? 0 : previous.ended, resumed ? null : previous.ended_at, agent.id);
+        if ((!previous.ended || resumed) && (state === "idle" || state === "active")) codexActivate(agent, previous.executable);
+        nativeActivity(agent.id, event.active_at);
+        break;
+      }
+    }
+  };
+  const eventIterator = options.codexEvents?.[Symbol.asyncIterator]();
+  const eventTask = eventIterator ? (async () => {
+    try {
+      while (!closed) {
+        const next = await eventIterator.next();
+        if (closed) break;
+        if (next.done) { daemonOffline(); break; }
+        codexEvent(next.value);
+      }
+    } catch (error) {
+      if (!closed) { daemonOffline(); console.error("Codex lifecycle stream failed:", error); }
+    }
+  })() : undefined;
   // Resume deliveries to Codex threads that were online when the core last stopped.
   for (const agent of codexOnline()) for (const message of pending(agent)) deliverToCodex(message);
   return {
@@ -507,7 +574,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     async close() {
       if (closed) return;
       closed = true;
-      clearTimeout(codexTimer);
+      await eventIterator?.return?.();
+      await eventTask;
       for (const server of replyServers.values()) server.close();
       replyServers.clear();
       for (const connection of connections) { detach(connection); connection.stream.destroy(); }
