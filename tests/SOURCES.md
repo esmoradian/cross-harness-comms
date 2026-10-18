@@ -95,8 +95,8 @@ Sources: the observations of interactive Claude Code 2.1.289 sessions on 2026-10
 ### Bare names (HANDOFF-FIXES-2 fix 1)
 
 - Every `SendMessage` whose `to` does not start with `comms:` or `uds:` is resolved with `comms resolve`, which reads `{ token?, name, skip_claude? }` as JSON on stdin like `comms list` and prints `{ agent }`.
-- "Native peer messaging is on" is detected as `ListAgents` detects it: a `Peer sessions (N):` section in Claude's native listing.
-  Tests that need it on run `ListAgents` first with that section in `nativeListing`, in a session that also has `CLAUDE_CODE_MESSAGING_SOCKET`, so they hold whether the adapter remembers the last listing or reads the socket; what the adapter assumes before its first `ListAgents` is not specified.
+- "Native peer messaging is on" is detected from `CLAUDE_CODE_MESSAGING_SOCKET` at session start.
+  The `Peer sessions (N):` section controls where comms peers are appended in `ListAgents`, not whether bare-name resolution skips native Claude peers.
 
 ## Parent watch (HANDOFF-FIXES-2 fix 4)
 
@@ -133,6 +133,29 @@ The upstream [Codex dynamic MCP bridge](https://github.com/openai/codex/blob/mai
 This first fixture uses the object form; accepting both forms is compatible with its public `unknown` metadata value.
 Matching the hook's parent PID to the MCP parent's PID still needs a real integration probe.
 The fake models that accepted design assumption without claiming the launch topology was verified.
+
+### Native lifecycle events (tests only)
+
+Sources: Codex 0.163.0 generated `ThreadStartedNotification` and `ThreadStatusChangedNotification` schemas and the 2026-10-18 06:18 UTC observer captures summarized in `internal/VALIDATION-RESULTS-2026-10-17.md`.
+An independent daemon observer saw `thread/started` for a new unprompted thread; reopening an existing thread produced `notLoaded` then `idle` status notifications.
+
+- `tests/codex-lifecycle.test.ts` specifies the agreed core lifecycle rules without implementing them.
+- Its proposed injection point is `codexEvents: AsyncIterable<CodexEvent>` on the core options, passed through the rig structurally until the implementation declares it.
+  Entries retain native `method` and `params`; `thread/started` also carries the executable supplied by the future transport, as daemon snapshots do today.
+- `FakeCodexEvents` is a sequential notification source with a barrier after each consumed event, not a lifecycle reducer or fake core.
+  It owns no session, presence, routing, or storage behavior.
+- `thread/started` creates an identity before any hook; duplicate delivery preserves an existing identity and user-assigned name.
+- `SessionStart` confirms that same identity; `SessionEnd` leaves its identity and mailbox intact while taking it offline.
+- `notLoaded`, `idle`, and `active` describe an existing session and never remove its identity.
+  `notLoaded` takes it offline; a later load to `idle` or `active` reuses that identity and drains queued mail.
+- An `idle` or `active` notification alone cannot undo an explicit `SessionEnd`.
+  A subsequent observed `notLoaded` to `idle` transition represents a new load and can reactivate the same session without a first prompt.
+- A connect/reconnect snapshot recovers discovery, but cannot override an explicit end, including after core restart.
+  Disconnect or absence from the next snapshot takes daemon-owned sessions offline while leaving hook-only sessions alone.
+- `tests/codex-events-transport.test.ts` specifies `watchCodexDaemon(platform, { signal, retryMs, timeoutMs })` through a structural export until implementation supplies it.
+  It uses a real temporary Unix WebSocket endpoint to check one snapshot per connection, persistent idle connections, buffered notifications during discovery, reconnect, and cancellation.
+- Core lifecycle tests do not open real sockets or harnesses; transport tests do not run real Codex or model turns.
+  Neither specifies detach behavior.
 
 ## Narrow choices for the first specification
 

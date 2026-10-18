@@ -15,6 +15,7 @@ import { createCodexAdapter } from "../adapters/codex/src/index.ts";
 import { FakePi } from "./fakes/pi.ts";
 import { CLAUDE_VERSION, FakeClaude, FakeClaudeInbox } from "./fakes/claude.ts";
 import { FakeCodex } from "./fakes/codex.ts";
+import type { CodexEvent } from "./fakes/codex-events.ts";
 import { eventually, memoryPair, Peer, uuid } from "./helpers.ts";
 
 export interface HarnessSession {
@@ -62,6 +63,7 @@ export class Rig {
   constructor(readonly protocol?: VersionPolicy, readonly coreOptions: {
     pingTimeoutMs?: number; codexPollMs?: number; codexDaemon?: () => Promise<CodexSnapshot | undefined>; nativeAckMs?: number;
     now?: () => number;
+    codexEvents?: AsyncIterable<CodexEvent>;
   } = {}) {}
   // Real Claude names an inbox after the session's PID; these never start with 9.
   inboxPath(): string { return join(this.socketDirectory, `${20000 + this.inboxCount++}.sock`); }

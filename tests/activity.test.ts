@@ -2,19 +2,19 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Agent } from "@cross-harness-comms/protocol";
-import type { CodexSnapshot } from "@cross-harness-comms/core";
 import { codexDaemon } from "../packages/core/codex-daemon.ts";
 import type { Platform } from "../packages/core/platform/platform.ts";
 import { createCodexAdapter, type McpResult } from "../adapters/codex/src/index.ts";
 import type { PiToolResult } from "../adapters/pi/src/index.ts";
 import { FakeClaude } from "./fakes/claude.ts";
 import { FakeCodex } from "./fakes/codex.ts";
+import { FakeCodexEvents } from "./fakes/codex-events.ts";
 import { eventually, uuid } from "./helpers.ts";
 import { registration, withRig, type Rig } from "./rig.ts";
 
 // ADR-018: every agent carries `active_at`, the time of its last activity, kept in the core's memory.
 // The core sets it on register or reconnect, send, and ACK, and for a Codex thread also from the
-// daemon's `recencyAt` (or `updatedAt`) on each poll; it never moves backward, and until an agent is
+// daemon's native event activity time; it never moves backward, and until an agent is
 // active after a core start it falls back to `last_seen`. Times come from the core's injected clock.
 
 const T = (iso: string) => Date.parse(iso);
@@ -117,51 +117,34 @@ test("activity: after a core start, an agent not yet active falls back to last_s
   }, undefined, { now: time.read });
 });
 
-// A fake daemon snapshot, as the core's Codex poll reads it, counting reads so a test can wait for polls.
-function fakeDaemon() {
-  const daemon = {
-    snapshot: undefined as CodexSnapshot | undefined,
-    reads: 0,
-    read: async () => { daemon.reads++; return daemon.snapshot; },
-    async polls(count: number) {
-      const target = daemon.reads + count;
-      await eventually(() => daemon.reads, reads => expect(reads).toBeGreaterThanOrEqual(target));
-    },
-  };
-  return daemon;
-}
-
-test("activity: a Codex thread's active_at follows the daemon's activity time on each poll and never moves backward", async () => {
-  const daemon = fakeDaemon();
-  // The clock stays before every daemon time, so registering the thread does not mask them.
+test("activity: Codex activity follows daemon events and never moves backward", async () => {
+  const events = new FakeCodexEvents();
   const time = clock(T("2029-12-31T00:00:00.000Z"));
   await withRig(async rig => {
-    const fake = new FakeCodex(uuid(), "/projects/api");
-    rig.codexFakes.set(fake.threadId, fake);
-    const loaded = (active_at: string): CodexSnapshot => ({ executable: "/daemon/codex", threads: [{ id: fake.threadId, cwd: fake.cwd, active_at }] });
-    daemon.snapshot = loaded("2030-01-01T00:05:00.000Z");
-    const agent = await rig.agent("codex", fake.threadId);
-    await eventually(() => activeAt(rig, agent.id), value => expect(value).toBe(T2));
-
-    daemon.snapshot = loaded("2030-01-01T00:00:00.000Z");
-    await daemon.polls(3);
-    expect(await activeAt(rig, agent.id)).toBe(T2);
-
-    daemon.snapshot = loaded("2030-01-01T00:10:00.000Z");
-    await eventually(() => activeAt(rig, agent.id), value => expect(value).toBe(T3));
-
-    // A send at a later clock time is not undone by the next poll's earlier daemon time.
-    const target = await rig.harness("pi", uuid(), "/projects/web");
-    time.now = T4;
-    const adapter = createCodexAdapter(rig.runtime());
     try {
-      const result = await adapter.toolsCall(fake.request("comms_send", { to: `comms:${target.agent.name}`, text: "Done" }));
-      expect(result.isError).not.toBe(true);
-    } finally { await adapter.close(); }
-    expect(await activeAt(rig, agent.id)).toBe(T4);
-    await daemon.polls(3);
-    expect(await activeAt(rig, agent.id)).toBe(T4);
-  }, undefined, { codexDaemon: daemon.read, codexPollMs: 5, now: time.read });
+      const fake = new FakeCodex(uuid(), "/projects/api");
+      rig.codexFakes.set(fake.threadId, fake);
+      await events.publish({ method: "thread/started", executable: "/daemon/codex", params: {
+        thread: { id: fake.threadId, cwd: fake.cwd, active_at: new Date(T2).toISOString() } } });
+      const agent = await rig.agent("codex", fake.threadId);
+      expect(await activeAt(rig, agent.id)).toBe(T2);
+      const update = (at: number) => events.publish({ method: "thread/status/changed", active_at: new Date(at).toISOString(),
+        params: { threadId: fake.threadId, status: { type: "active", activeFlags: [] } } });
+      await update(T1);
+      expect(await activeAt(rig, agent.id)).toBe(T2);
+      await update(T3);
+      expect(await activeAt(rig, agent.id)).toBe(T3);
+      const target = await rig.harness("pi", uuid(), "/projects/web");
+      time.now = T4;
+      const adapter = createCodexAdapter(rig.runtime());
+      try {
+        const result = await adapter.toolsCall(fake.request("comms_send", { to: `comms:${target.agent.name}`, text: "Done" }));
+        expect(result.isError).not.toBe(true);
+      } finally { await adapter.close(); }
+      await update(T3);
+      expect(await activeAt(rig, agent.id)).toBe(T4);
+    } finally { events.close(); }
+  }, undefined, { codexEvents: events, now: time.read });
 });
 
 test("activity: Pi's and Codex's comms_list results include active_at", async () => {
