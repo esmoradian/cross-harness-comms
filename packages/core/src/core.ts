@@ -1,22 +1,20 @@
 import type { Duplex } from "node:stream";
-import { connect, createServer, type Server, type Socket } from "node:net";
-import { rmSync } from "node:fs";
-import { Database } from "bun:sqlite";
-import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
-import { basename, dirname } from "node:path";
-import { hostname } from "node:os";
-import type { CodexEvent, CodexRuntimeState, CodexThread } from "./codex/events.ts";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { basename } from "node:path";
+import type { CodexEvent } from "./codex/events.ts";
 import { readPackets, writePacket } from "@cross-harness-comms/client";
-import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
-  CLAUDE_INBOX_VERSIONS, CLAUDE_NATIVE_MIN_VERSION, formatClaudeInboxLine, parseClaudeInboxLine, compareVersions, messageId, splitLines,
-  type Agent, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
+import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, negotiate, resolveAddress, MAX_LINE_BYTES, CLAUDE_NATIVE_MIN_VERSION,
+  compareVersions, messageId, type Agent, type Delivery, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
+import { hash, openStore, type AgentRow, type Store } from "./store.ts";
+import { claudeRoute } from "./claude.ts";
+import { codexThreads, type Run } from "./codex/threads.ts";
 
 export interface Core {
   attach(stream: Duplex): void;
   close(): Promise<void>;
 }
 
-interface Connection {
+export interface Connection {
   stream: Duplex;
   version?: number;
   agent?: string;
@@ -29,13 +27,22 @@ interface Connection {
   native?: boolean;
   inflight?: { id: string; from: string; timer?: ReturnType<typeof setTimeout> };
 }
+
+// What the Claude route and Codex threads share with the core.
+export interface Context {
+  store: Store;
+  // The connection of each registered agent that is attached now.
+  live: Map<string, Connection>;
+  closed: boolean;
+  now: () => number;
+  touch(agent: string, time?: number): void;
+  upsert(session: SessionRegistration, tokenHash?: string): Agent;
+  delivery(message: Message): Delivery;
+  deliver(message: Message): void;
+  accept(id: string, sender: string, recipient: string, body: string, reply_to?: string): void;
+}
+
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-// Claude mints its own message IDs, of any UUID version.
-const anyUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// A reply socket is named like Claude's `<pid>.sock`, with ten digits starting at 9 so it is never a PID,
-// and derived from the agent so its `uds:` address survives core restarts.
-const replyPath = (directory: string, agent: string) =>
-  `${directory}/9${String(parseInt(createHash("sha256").update(agent).digest("hex").slice(0, 12), 16) % 1e9).padStart(9, "0")}.sock`;
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw failure("INVALID_PARAMS", "Expected an object", -32602);
   return value as Record<string, unknown>;
@@ -52,74 +59,25 @@ function registration(value: unknown): SessionRegistration {
     host: string(fields.host), cwd: string(fields.cwd) };
 }
 
-export type Run = (argv: readonly string[]) => Promise<{ exitCode: number; stderr?: string }>;
-
-// shortcut: no timeout on `codex queue`; a hung command stalls only that thread's deliveries.
-const spawn: Run = async argv => {
-  const child = Bun.spawn([...argv], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-  return { exitCode: await child.exited, stderr: await new Response(child.stderr).text() };
-};
-
 export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number; run?: Run;
   codexEvents?: AsyncIterable<CodexEvent>; nativeAckMs?: number; now?: () => number }): Core {
   const policy = options.protocol ?? DEFAULT_POLICY;
-  const now = options.now ?? Date.now;
-  const db = new Database(options.databasePath, { create: true });
-  db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
-    CREATE TABLE IF NOT EXISTS agents (
-      id TEXT PRIMARY KEY, harness TEXT NOT NULL, session_key TEXT NOT NULL,
-      host TEXT NOT NULL, name TEXT NOT NULL UNIQUE, cwd TEXT NOT NULL, last_seen TEXT NOT NULL, token_hash TEXT,
-      UNIQUE(harness, session_key));
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY, sender TEXT NOT NULL REFERENCES agents(id), recipient TEXT NOT NULL REFERENCES agents(id),
-      reply_to TEXT REFERENCES messages(id), body TEXT NOT NULL, created_at TEXT NOT NULL,
-      state TEXT NOT NULL CHECK(state IN ('queued','delivered','acked')));
-    CREATE INDEX IF NOT EXISTS mailbox ON messages(recipient, state);
-    CREATE TABLE IF NOT EXISTS codex_threads (agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS codex_lifecycle (
-      agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL,
-      runtime_state TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, ended_at INTEGER, daemon_owned INTEGER NOT NULL DEFAULT 0);
-    INSERT OR IGNORE INTO codex_lifecycle (agent, executable, runtime_state)
-      SELECT agent, executable, 'unknown' FROM codex_threads;`);
-  // Earlier event-driven builds persisted lifecycle rows before end timestamps existed.
-  const lifecycleColumns = db.query("PRAGMA table_info(codex_lifecycle)").all() as { name: string }[];
-  if (!lifecycleColumns.some(column => column.name === "ended_at")) db.exec("ALTER TABLE codex_lifecycle ADD COLUMN ended_at INTEGER");
-  // Daemon presence must be reconciled before dispatching mail after a restart.
-  // Hook-only sessions keep their existing restart behavior.
-  if (options.codexEvents) db.exec("DELETE FROM codex_threads WHERE agent IN (SELECT agent FROM codex_lifecycle WHERE daemon_owned = 1)");
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS agent_token ON agents(token_hash)");
-  const hash = (token: string) => createHash("sha256").update(token).digest("hex");
+  const store = openStore(options.databasePath), { db } = store;
   const pingTimeoutMs = options.pingTimeoutMs ?? 2000;
   if (!Number.isFinite(pingTimeoutMs) || pingTimeoutMs < 0) { db.close(); throw new Error("Invalid ping timeout"); }
-  let closed = false;
   const connections = new Set<Connection>();
   const live = new Map<string, Connection>();
   const registrations = new Map<string, Promise<unknown>>();
-  const run = options.run ?? spawn;
-  const codexChains = new Map<string, Promise<void>>();
-  const nativeAckMs = options.nativeAckMs ?? 5000;
-  const replyServers = new Map<string, Server>();
-  // Runtime availability is separate from the durable identity and lifecycle record.
-  const codexOnline = () => new Set((db.query("SELECT agent FROM codex_threads").all() as { agent: string }[]).map(row => row.agent));
   // Each agent's last activity in epoch milliseconds, kept in memory only; it never moves backward (ADR-018).
   const activity = new Map<string, number>();
-  const touch = (agent: string, time = now()) => activity.set(agent, Math.max(activity.get(agent) ?? time, time));
-  const agentFields = "id, harness, session_key, host, name, cwd, last_seen";
   // An agent row with its presence and activity, as every listing shows it.
-  const present = (agent: Omit<Agent, "online">, codex: Set<string>): Agent => {
+  const present = (agent: AgentRow, codexOnline: boolean): Agent => {
     const active = activity.get(agent.id);
-    return { ...agent, online: live.has(agent.id) || codex.has(agent.id), active_at: active === undefined ? agent.last_seen : new Date(active).toISOString() };
+    return { ...agent, online: live.has(agent.id) || codexOnline, active_at: active === undefined ? agent.last_seen : new Date(active).toISOString() };
   };
   const agents = (): Agent[] => {
-    const codex = codexOnline();
-    return (db.query(`SELECT ${agentFields} FROM agents ORDER BY rowid`).all() as Omit<Agent, "online">[]).map(agent => present(agent, codex));
-  };
-  // The agent with exactly this name, read through the name's unique index.
-  const agentNamed = (name: string): Agent | undefined => {
-    const agent = db.query(`SELECT ${agentFields} FROM agents WHERE name = ?`).get(name) as Omit<Agent, "online"> | null;
-    if (!agent) return undefined;
-    const codex = db.query("SELECT 1 FROM codex_threads WHERE agent = ?").get(agent.id) ? new Set([agent.id]) : new Set<string>();
-    return present(agent, codex);
+    const codex = store.codexOnline();
+    return store.agents().map(agent => present(agent, codex.has(agent.id)));
   };
   const packet = (connection: Connection, value: WirePacket) => writePacket(connection.stream,
     convert(value, policy.latest, connection.version ?? policy.latest, policy));
@@ -129,140 +87,66 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     for (const finish of connection.pings.values()) finish(false);
     if (connection.agent && live.get(connection.agent) === connection) {
       live.delete(connection.agent);
-      if (!closed) db.query("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), connection.agent);
+      if (!ctx.closed) store.seen(connection.agent);
     }
   };
   const authenticated = (params: Record<string, unknown>) => {
-    const agent = typeof params.token === "string"
-      ? db.query("SELECT id FROM agents WHERE token_hash = ?").get(hash(params.token)) as { id: string } | null : null;
+    const agent = store.agentWithToken(params.token);
     if (!agent) throw failure("INVALID_TOKEN");
-    return agent.id;
+    return agent;
   };
-  // How an agent appears to the caller holding `token`: a Claude caller on the native route sees
-  // each other harness's reply socket as its `claude_address` (ADR-016).
-  const addressing = (token: unknown): (agent: Agent) => Agent => {
-    const caller = typeof token === "string" ? db.query("SELECT id FROM agents WHERE token_hash = ?").get(hash(token)) as { id: string } | null : null;
-    const connection = caller ? live.get(caller.id) : undefined;
-    const directory = connection?.native && connection.inbox ? dirname(connection.inbox) : undefined;
-    return agent => directory && agent.harness !== "claude" ? { ...agent, claude_address: `uds:${replyPath(directory, agent.id)}` } : agent;
+  const ctx: Context = {
+    store, live, closed: false, now: options.now ?? Date.now,
+    touch: (agent, time = ctx.now()) => { activity.set(agent, Math.max(activity.get(agent) ?? time, time)); },
+    delivery: message => {
+      const sender = store.agentById(message.sender)!;
+      return { message, from: `comms:${sender.name}`, harness: sender.harness, cwd: sender.cwd };
+    },
+    deliver: message => {
+      if (message.state === "acked") return;
+      const connection = live.get(message.recipient);
+      if (!connection) { if (store.codexThread(message.recipient)) codex.deliver(message); return; }
+      if (connection.native && store.agentById(message.sender)?.harness !== "claude") { claude.deliver(connection, message); return; }
+      try {
+        // State is committed before writing to the stream. Reconnect retries both
+        // queued and delivered records, including a write interrupted by a crash.
+        store.markDelivered(message.id);
+        packet(connection, { jsonrpc: "2.0", method: "deliver", params: ctx.delivery({ ...message, state: "delivered" }) });
+      } catch { detach(connection); connection.stream.destroy(); }
+    },
+    // Stores a new message and delivers it, refusing one whose delivery line would exceed the limit.
+    accept: (id, sender, recipient, body, reply_to) => {
+      const message: Message = { id, sender, recipient, body, created_at: new Date().toISOString(), state: "queued", ...(reply_to ? { reply_to } : {}) };
+      // Reserve the longest valid sender name and persisted nullable reply field,
+      // so a later rename or replay cannot make an accepted message undeliverable.
+      const envelope = { ...ctx.delivery(message), from: "comms:" + "x".repeat(64),
+        message: { ...message, state: "delivered", reply_to: reply_to ?? null } };
+      if (Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", method: "deliver", params: envelope })) > MAX_LINE_BYTES)
+        throw failure("INVALID_MESSAGE", "Delivery line exceeds 1 MB");
+      db.query("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, sender, recipient, reply_to ?? null, body, message.created_at, message.state);
+      ctx.touch(sender);
+      ctx.deliver(message);
+    },
+    // Creates or refreshes an agent; a token hash is replaced only when given.
+    upsert: (session, tokenHash) => {
+      const now = new Date().toISOString();
+      const agent = store.agentBySession(session.harness, session.session_key);
+      if (agent) {
+        db.query("UPDATE agents SET host = ?, cwd = ?, last_seen = ? WHERE id = ?").run(session.host, session.cwd, now, agent.id);
+        if (tokenHash) db.query("UPDATE agents SET token_hash = ? WHERE id = ?").run(tokenHash, agent.id);
+        return { ...present(agent, true), ...session, last_seen: now };
+      }
+      const base = `${session.harness}-${basename(session.cwd) || "session"}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64);
+      let name = base, suffix = 1;
+      while (store.agentNamed(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
+      const id = messageId(Date.now());
+      db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null);
+      if (session.harness !== "claude") claude.openReplySockets();
+      return { ...session, id, name, last_seen: now, online: true };
+    },
   };
-  // The Codex MCP server acts for whichever online thread its call names (ADR-014).
-  const codexSender = (thread: string) => {
-    const agent = agents().find(a => a.harness === "codex" && a.session_key === thread);
-    if (!agent || !codexOnline().has(agent.id)) throw failure("UNKNOWN_SESSION", "Codex thread has not started a comms session");
-    return agent.id;
-  };
-  const delivery = (message: Message) => {
-    const sender = agents().find(a => a.id === message.sender)!;
-    return { message, from: `comms:${sender.name}`, harness: sender.harness, cwd: sender.cwd };
-  };
-  const deliverToCodex = (message: Message) => {
-    const chain = (codexChains.get(message.recipient) ?? Promise.resolve()).then(async () => {
-      if (closed) return;
-      const thread = db.query("SELECT t.executable, a.session_key FROM codex_threads t JOIN agents a ON a.id = t.agent WHERE t.agent = ?")
-        .get(message.recipient) as { executable: string; session_key: string } | null;
-      const current = db.query("SELECT state FROM messages WHERE id = ?").get(message.id) as { state: Message["state"] } | null;
-      if (!thread || !current || current.state === "acked") return;
-      db.query("UPDATE messages SET state = 'delivered' WHERE id = ? AND state = 'queued'").run(message.id);
-      const text = formatMessage(delivery({ ...message, state: "delivered" }), "codex");
-      const result = await run([thread.executable, "queue", "--thread", thread.session_key, "--message", text]).catch(() => ({ exitCode: 1 }));
-      if (closed) return;
-      // Codex accepting the queued message is the ACK; a refusal means the thread is gone.
-      if (result.exitCode === 0) db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(message.id);
-      else db.query("DELETE FROM codex_threads WHERE agent = ?").run(message.recipient);
-    });
-    codexChains.set(message.recipient, chain.catch(() => {}));
-  };
-  const deliver = (message: Message) => {
-    if (message.state === "acked") return;
-    const connection = live.get(message.recipient);
-    if (!connection) { if (codexOnline().has(message.recipient)) deliverToCodex(message); return; }
-    if (connection.native && agents().find(a => a.id === message.sender)?.harness !== "claude") { deliverNative(connection, message); return; }
-    try {
-      // State is committed before writing to the stream. Reconnect retries both
-      // queued and delivered records, including a write interrupted by a crash.
-      db.query("UPDATE messages SET state = 'delivered' WHERE id = ? AND state = 'queued'").run(message.id);
-      packet(connection, { jsonrpc: "2.0", method: "deliver", params: delivery({ ...message, state: "delivered" }) });
-    } catch { detach(connection); connection.stream.destroy(); }
-  };
-  // One native line is in flight per Claude session; the next is written after its ACK (ADR-016).
-  const deliverNative = (connection: Connection, message: Message) => {
-    if (connection.inflight) return;
-    const sender = agents().find(a => a.id === message.sender)!;
-    const from = `uds:${replyPath(dirname(connection.inbox!), sender.id)}`;
-    db.query("UPDATE messages SET state = 'delivered' WHERE id = ? AND state = 'queued'").run(message.id);
-    connection.inflight = { id: message.id, from, timer: setTimeout(() => fallback(connection), nativeAckMs) };
-    let connected = false;
-    const socket = connect(connection.inbox!, () => {
-      connected = true;
-      socket.end(formatClaudeInboxLine({ msg_id: message.id, from, from_name: sender.name, body: message.body }) + "\n");
-    });
-    socket.on("error", () => { if (!connected) fallback(connection); });
-  };
-  // A missing ACK or an unreachable inbox turns the native route off for this attachment and
-  // resends the in-flight and queued messages as `deliver` packets; messages already handed over
-  // as packets wait for their ACK or a reconnect. The in-flight record stays for a late ACK.
-  const fallback = (connection: Connection) => {
-    const inflight = connection.inflight;
-    if (!inflight?.timer) return;
-    clearTimeout(inflight.timer);
-    delete inflight.timer;
-    connection.native = false;
-    if (connection.agent && live.get(connection.agent) === connection)
-      for (const message of pending(connection.agent)) if (message.id === inflight.id || message.state === "queued") deliver(message);
-  };
-  // While a native Claude session is attached, every non-Claude agent has a reply socket in its inbox directory.
-  const openReplySockets = () => {
-    const directories = new Set([...live.values()].flatMap(c => c.native && c.inbox ? [dirname(c.inbox)] : []));
-    for (const directory of directories) for (const agent of agents()) {
-      const path = replyPath(directory, agent.id);
-      if (agent.harness === "claude" || replyServers.has(path)) continue;
-      rmSync(path, { force: true });
-      const server = createServer(socket => readReplies(socket, agent.id));
-      server.on("error", () => { if (replyServers.get(path) === server) replyServers.delete(path); });
-      server.listen(path);
-      replyServers.set(path, server);
-    }
-  };
-  const readReplies = (socket: Socket, recipient: string) => {
-    let buffer = "";
-    socket.setEncoding("utf8");
-    socket.on("error", () => {});
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      // shortcut: a line this long cannot fit the delivery limit; drop the connection rather than buffer it.
-      if (buffer.length > 2 * MAX_LINE_BYTES) { socket.destroy(); return; }
-      const { lines, rest } = splitLines(buffer);
-      buffer = rest;
-      for (const line of lines) receiveReply(recipient, line);
-    });
-    socket.on("end", () => { if (buffer) receiveReply(recipient, buffer); });
-  };
-  // A Claude session's own SendMessage to a reply socket becomes a message from its agent.
-  const receiveReply = (recipient: string, text: string) => {
-    const line = closed ? undefined : parseClaudeInboxLine(text);
-    const owner = line && [...live.values()].find(c => c.inbox && `uds:${c.inbox}` === line.from);
-    if (!line || !owner?.agent || !anyUuid.test(line.msg_id)) return;
-    if (!CLAUDE_INBOX_VERSIONS.includes(line.msgV)) owner.native = false;
-    if (db.query("SELECT id FROM messages WHERE id = ?").get(line.msg_id)) return;
-    const unanswered = db.query(`SELECT id FROM messages m WHERE sender = ? AND recipient = ?
-      AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.reply_to = m.id) ORDER BY rowid DESC LIMIT 1`).get(recipient, owner.agent) as { id: string } | null;
-    try { store(line.msg_id, owner.agent, recipient, line.body, unanswered?.id); }
-    catch { /* Over the delivery size limit: dropped. */ }
-  };
-  // Stores a new message and delivers it, refusing one whose delivery line would exceed the limit.
-  const store = (id: string, sender: string, recipient: string, body: string, reply_to?: string) => {
-    const message: Message = { id, sender, recipient, body, created_at: new Date().toISOString(), state: "queued", ...(reply_to ? { reply_to } : {}) };
-    // Reserve the longest valid sender name and persisted nullable reply field,
-    // so a later rename or replay cannot make an accepted message undeliverable.
-    const envelope = { ...delivery(message), from: "comms:" + "x".repeat(64),
-      message: { ...message, state: "delivered", reply_to: reply_to ?? null } };
-    if (Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", method: "deliver", params: envelope })) > MAX_LINE_BYTES)
-      throw failure("INVALID_MESSAGE", "Delivery line exceeds 1 MB");
-    db.query("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, sender, recipient, reply_to ?? null, body, message.created_at, message.state);
-    touch(sender);
-    deliver(message);
-  };
+  const claude = claudeRoute(ctx, options.nativeAckMs ?? 5000);
   const ping = (connection: Connection): Promise<boolean> => new Promise(resolve => {
     if (connection.stream.destroyed || connection.stream.writableEnded) { resolve(false); return; }
     const id = "ping:" + messageId(Date.now());
@@ -276,70 +160,27 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     try { packet(connection, { jsonrpc: "2.0", id, method: "ping", params: {} }); }
     catch { finish(false); }
   });
-  // Creates or refreshes an agent; a token hash is replaced only when given.
-  const upsert = (session: SessionRegistration, tokenHash?: string): Agent => {
-    const now = new Date().toISOString();
-    const agent = agents().find(a => a.harness === session.harness && a.session_key === session.session_key);
-    if (agent) {
-      db.query("UPDATE agents SET host = ?, cwd = ?, last_seen = ? WHERE id = ?").run(session.host, session.cwd, now, agent.id);
-      if (tokenHash) db.query("UPDATE agents SET token_hash = ? WHERE id = ?").run(tokenHash, agent.id);
-      return { ...agent, ...session, last_seen: now, online: true };
-    }
-    const base = `${session.harness}-${basename(session.cwd) || "session"}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64);
-    let name = base, suffix = 1;
-    const names = new Set(agents().map(a => a.name));
-    while (names.has(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
-    const id = messageId(Date.now());
-    db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null);
-    if (session.harness !== "claude") openReplySockets();
-    return { ...session, id, name, last_seen: now, online: true };
-  };
-  const codexActivate = (agent: Agent, executable: string) => {
-    db.query("INSERT OR REPLACE INTO codex_threads (agent, executable) VALUES (?, ?)").run(agent.id, executable);
-    for (const message of pending(agent.id)) deliverToCodex(message);
-  };
-  const codexStart = (session: SessionRegistration, executable: string): Agent => {
-    const agent = upsert(session);
-    touch(agent.id);
-    db.query(`INSERT INTO codex_lifecycle (agent, executable, runtime_state) VALUES (?, ?, 'idle')
-      ON CONFLICT(agent) DO UPDATE SET executable = excluded.executable, runtime_state = 'idle', ended = 0, ended_at = NULL`).run(agent.id, executable);
-    codexActivate(agent, executable);
-    return agent;
-  };
-  const codexEnd = (thread: string, ended = true, state: CodexRuntimeState = "unknown") => {
-    const agent = agents().find(a => a.harness === "codex" && a.session_key === thread);
-    if (!agent) return;
-    db.query(`INSERT INTO codex_lifecycle (agent, executable, runtime_state, ended, ended_at) VALUES (?, 'codex', ?, ?, ?)
-      ON CONFLICT(agent) DO UPDATE SET runtime_state = excluded.runtime_state,
-        ended = CASE WHEN excluded.ended = 1 THEN 1 ELSE codex_lifecycle.ended END,
-        ended_at = CASE WHEN excluded.ended = 1 THEN excluded.ended_at ELSE codex_lifecycle.ended_at END`)
-      .run(agent.id, state, ended ? 1 : 0, ended ? now() : null);
-    db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent.id);
-    db.query("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), agent.id);
-  };
-  const pending = (agent: string) => db.query("SELECT * FROM messages WHERE recipient = ? AND state != 'acked' ORDER BY rowid").all(agent) as Message[];
   const register = async (input: SessionRegistration, connection: Connection, suppliedToken: unknown): Promise<Agent> => {
     const session = registration(input);
     const key = JSON.stringify([session.harness, session.session_key]);
     const previousRegistration = registrations.get(key) ?? Promise.resolve();
     const pending = previousRegistration.catch(() => {}).then(async () => {
-      if (closed || connection.stream.destroyed) throw failure("DISCONNECTED");
-      let agent = agents().find(a => a.harness === session.harness && a.session_key === session.session_key);
-      const stored = agent ? db.query("SELECT token_hash FROM agents WHERE id = ?").get(agent.id) as { token_hash: string | null } : undefined;
+      if (ctx.closed || connection.stream.destroyed) throw failure("DISCONNECTED");
+      const existing = store.agentBySession(session.harness, session.session_key);
+      const stored = existing ? db.query("SELECT token_hash FROM agents WHERE id = ?").get(existing.id) as { token_hash: string | null } : undefined;
       const suppliedHash = typeof suppliedToken === "string" ? hash(suppliedToken) : undefined;
       const matches = !!stored?.token_hash && !!suppliedHash && timingSafeEqual(Buffer.from(stored.token_hash), Buffer.from(suppliedHash));
-      const previous = agent ? live.get(agent.id) : undefined;
+      const previous = existing ? live.get(existing.id) : undefined;
       if (previous && !matches) {
         const responsive = await ping(previous);
-        if (closed || connection.stream.destroyed) throw failure("DISCONNECTED");
-        if (live.get(agent!.id) === previous && responsive) throw failure("SESSION_IN_USE", "Live session requires its current token");
+        if (ctx.closed || connection.stream.destroyed) throw failure("DISCONNECTED");
+        if (live.get(existing!.id) === previous && responsive) throw failure("SESSION_IN_USE", "Live session requires its current token");
         // A failed liveness check relinquishes the old connection before issuing
         // new credentials. Registrations for this native session are serialized.
       }
       const token = matches ? suppliedToken as string : randomBytes(32).toString("hex");
-      agent = upsert(session, hash(token));
-      touch(agent.id);
+      const agent = ctx.upsert(session, hash(token));
+      ctx.touch(agent.id);
       if (previous) {
         detach(previous);
         try { packet(previous, { jsonrpc: "2.0", method: "session_replaced", params: {} }); previous.stream.end(); }
@@ -360,12 +201,12 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       if (connection.version !== undefined) throw failure("INVALID_REQUEST", "hello already completed", -32600);
       connection.version = negotiate(params.versions as { min: number; max: number }, policy);
       if (params.claude !== undefined) {
-        const claude = object(params.claude);
-        connection.inbox = string(claude.inbox);
-        connection.native = compareVersions(string(claude.version), CLAUDE_NATIVE_MIN_VERSION) >= 0;
+        const { inbox, version } = object(params.claude);
+        connection.inbox = string(inbox);
+        connection.native = compareVersions(string(version), CLAUDE_NATIVE_MIN_VERSION) >= 0;
       }
       const agent = params.session ? await register(object(params.session) as unknown as SessionRegistration, connection, params.token) : undefined;
-      if (agent && connection.native) openReplySockets();
+      if (agent && connection.native) claude.openReplySockets();
       const notice = policy.versions[connection.version]?.notice;
       return { version: connection.version, ...(agent ? { agent, token: connection.token } : {}), ...(notice ? { notice } : {}) };
     }
@@ -374,56 +215,50 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       case "codex_session_start": {
         const session = registration(params.session);
         if (session.harness !== "codex") throw failure("INVALID_PARAMS", "Not a Codex session", -32602);
-        return { agent: codexStart(session, string(params.executable)) };
+        return { agent: codex.start(session, string(params.executable)) };
       }
-      case "codex_session_end": codexEnd(string(params.session_key)); return { ok: true };
+      case "codex_session_end": codex.end(string(params.session_key)); return { ok: true };
       case "list": {
-        const address = addressing(params.token);
-        return { agents: agents().map(address) };
+        return { agents: agents().map(claude.addressing(params.token)) };
       }
       case "resolve": {
         // Exact names only, never addresses or IDs; `skip_claude` leaves Claude agents to Claude's own messaging.
-        const agent = agentNamed(string(params.name));
+        const row = store.agentNamed(string(params.name)), agent = row && present(row, !!store.codexThread(row.id));
         if (!agent || (params.skip_claude === true && agent.harness === "claude")) return { agent: null };
-        return { agent: addressing(params.token)(agent) };
+        return { agent: claude.addressing(params.token)(agent) };
       }
       case "send": {
-        const sender = params.codex_thread === undefined ? authenticated(params) : codexSender(string(params.codex_thread));
+        const sender = params.codex_thread === undefined ? authenticated(params) : codex.sender(string(params.codex_thread));
         const id = string(params.id);
         if (!uuid.test(id) || typeof params.body !== "string") throw failure("INVALID_MESSAGE");
         const target = resolveAddress(string(params.to), agents()), recipient = target.id;
         const to = { name: target.name, online: target.online };
         const reply_to = params.reply_to === undefined ? undefined : string(params.reply_to);
-        if (reply_to && !db.query("SELECT id FROM messages WHERE id = ?").get(reply_to)) throw failure("INVALID_MESSAGE", "Unknown reply_to message");
-        const existing = db.query("SELECT * FROM messages WHERE id = ?").get(id) as Message | null;
+        if (reply_to && !store.message(reply_to)) throw failure("INVALID_MESSAGE", "Unknown reply_to message");
+        const existing = store.message(id);
         if (existing) {
           if (existing.sender !== sender || existing.recipient !== recipient || existing.body !== params.body || (existing.reply_to ?? undefined) !== reply_to)
             throw failure("INVALID_MESSAGE", "Message ID already belongs to different content");
           return { id, state: existing.state, ...to };
         }
-        store(id, sender, recipient, params.body, reply_to);
-        return { ...db.query("SELECT id, state FROM messages WHERE id = ?").get(id) as object, ...to };
+        ctx.accept(id, sender, recipient, params.body, reply_to);
+        return { id, state: store.message(id)!.state, ...to };
       }
       case "ack": {
         const recipient = authenticated(params), id = string(params.id);
-        const message = db.query("SELECT * FROM messages WHERE id = ?").get(id) as Message | null;
+        const message = store.message(id);
         if (!message) throw failure("INVALID_MESSAGE", "Unknown message");
         if (message.recipient !== recipient) throw failure("FORBIDDEN");
         if (message.state === "queued") throw failure("INVALID_MESSAGE", "Message has not been delivered");
-        db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(id);
-        touch(recipient);
+        store.markAcked(id);
+        ctx.touch(recipient);
         return { id, state: "acked" };
       }
       case "native_ack": {
         const agent = authenticated(params), from = string(params.from);
-        const connection = live.get(agent), inflight = connection?.inflight;
-        if (!connection || !inflight || inflight.from !== from) throw failure("INVALID_MESSAGE", "No native message in flight from that address");
-        clearTimeout(inflight.timer);
-        delete connection.inflight;
-        db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(inflight.id);
-        touch(agent);
-        if (connection.native) for (const message of pending(agent)) if (message.state === "queued") deliver(message);
-        return { id: inflight.id };
+        const id = claude.ack(agent, from);
+        if (id === undefined) throw failure("INVALID_MESSAGE", "No native message in flight from that address");
+        return { id };
       }
       case "detach": {
         const agent = authenticated(params);
@@ -438,12 +273,13 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       case "rename": {
         const agent = resolveAddress(string(params.address), agents()), name = string(params.name);
         if (!/^[a-z0-9._-]{1,64}$/.test(name) || /^[0-9a-f-]{8,}$/.test(name)) throw failure("INVALID_NAME", "Use 1-64 lowercase letters, digits, dots, underscores or hyphens; UUID-like names are reserved");
-        if (agents().some(a => a.name === name && a.id !== agent.id)) throw failure("NAME_TAKEN");
+        const holder = store.agentNamed(name);
+        if (holder && holder.id !== agent.id) throw failure("NAME_TAKEN");
         db.query("UPDATE agents SET name = ? WHERE id = ?").run(name, agent.id);
         return { ...agent, name };
       }
       case "inspect": {
-        const message = db.query("SELECT * FROM messages WHERE id = ?").get(string(params.id));
+        const message = store.message(string(params.id));
         if (!message) throw failure("INVALID_MESSAGE", "Unknown message");
         return message;
       }
@@ -456,85 +292,10 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       default: throw failure("METHOD_NOT_FOUND", "Method not found", -32601);
     }
   };
-  type Lifecycle = { executable: string; runtime_state: CodexRuntimeState; ended: number; ended_at: number | null; daemon_owned: number };
-  const lifecycle = (agent: string) => db.query("SELECT executable, runtime_state, ended, ended_at, daemon_owned FROM codex_lifecycle WHERE agent = ?")
-    .get(agent) as Lifecycle | null;
-  const nativeActivity = (agent: string, time?: string) => {
-    if (time && Number.isFinite(Date.parse(time))) touch(agent, Date.parse(time));
-  };
-  const discoverCodex = (thread: CodexThread, executable: string, snapshot: boolean) => {
-    if (thread.parentThreadId || thread.ephemeral) return;
-    const existing = agents().find(a => a.harness === "codex" && a.session_key === thread.id);
-    const agent = existing ?? upsert({ harness: "codex", session_key: thread.id, host: hostname(), cwd: thread.cwd });
-    const previous = lifecycle(agent.id);
-    // A duplicate creation event and a recovery snapshot cannot undo an end.
-    const state = previous && (previous.ended || (!snapshot && existing)) ? previous.runtime_state : (thread.status?.type ?? "idle");
-    db.query(`INSERT INTO codex_lifecycle (agent, executable, runtime_state, daemon_owned) VALUES (?, ?, ?, 1)
-      ON CONFLICT(agent) DO UPDATE SET executable = excluded.executable, daemon_owned = 1,
-        runtime_state = CASE WHEN codex_lifecycle.ended = 1 THEN codex_lifecycle.runtime_state ELSE excluded.runtime_state END`)
-      .run(agent.id, executable, state);
-    if (!existing) touch(agent.id);
-    if (!previous?.ended && (!existing || snapshot)) {
-      if (state === "notLoaded" || state === "systemError") codexEnd(thread.id, false, state);
-      else codexActivate(agent, executable);
-    }
-    nativeActivity(agent.id, thread.active_at);
-  };
-  const daemonOffline = (except = new Set<string>()) => {
-    const owned = db.query(`SELECT a.session_key FROM codex_lifecycle c JOIN agents a ON a.id = c.agent WHERE c.daemon_owned = 1`)
-      .all() as { session_key: string }[];
-    for (const { session_key } of owned) if (!except.has(session_key)) codexEnd(session_key, false);
-  };
-  const codexEvent = (event: CodexEvent) => {
-    switch (event.method) {
-      case "thread/started": discoverCodex(event.params.thread, event.executable, false); break;
-      case "comms/daemon-discovered": discoverCodex(event.params.thread, event.executable, true); break;
-      case "comms/daemon-snapshot": {
-        const threads = event.params.threads.filter(thread => !thread.parentThreadId && !thread.ephemeral);
-        daemonOffline(new Set(threads.map(thread => thread.id)));
-        for (const thread of threads) discoverCodex(thread, event.executable, true);
-        break;
-      }
-      case "comms/daemon-disconnected": daemonOffline(); break;
-      case "thread/closed": codexEnd(event.params.threadId, false, "notLoaded"); break;
-      case "thread/archived": case "thread/deleted": codexEnd(event.params.threadId); break;
-      case "thread/status/changed": {
-        const agent = agents().find(a => a.harness === "codex" && a.session_key === event.params.threadId);
-        if (!agent) break; // A status is not a new identity or a creation event.
-        const previous = lifecycle(agent.id);
-        if (!previous) break;
-        // Native events may have waited in the transport's discovery buffer
-        // while a hook ended this session on a different core connection.
-        if (previous.ended && previous.ended_at !== null && event.active_at && Date.parse(event.active_at) <= previous.ended_at) break;
-        const state = event.params.status.type;
-        if (state === "notLoaded" || state === "systemError") { codexEnd(agent.session_key, false, state); break; }
-        const resumed = previous.runtime_state === "notLoaded" && (state === "idle" || state === "active");
-        db.query("UPDATE codex_lifecycle SET runtime_state = ?, ended = ?, ended_at = ?, daemon_owned = 1 WHERE agent = ?")
-          .run(state, resumed ? 0 : previous.ended, resumed ? null : previous.ended_at, agent.id);
-        if ((!previous.ended || resumed) && (state === "idle" || state === "active")) codexActivate(agent, previous.executable);
-        nativeActivity(agent.id, event.active_at);
-        break;
-      }
-    }
-  };
-  const eventIterator = options.codexEvents?.[Symbol.asyncIterator]();
-  const eventTask = eventIterator ? (async () => {
-    try {
-      while (!closed) {
-        const next = await eventIterator.next();
-        if (closed) break;
-        if (next.done) { daemonOffline(); break; }
-        codexEvent(next.value);
-      }
-    } catch (error) {
-      if (!closed) { daemonOffline(); console.error("Codex lifecycle stream failed:", error); }
-    }
-  })() : undefined;
-  // Resume deliveries to Codex threads that were online when the core last stopped.
-  for (const agent of codexOnline()) for (const message of pending(agent)) deliverToCodex(message);
+  const codex = codexThreads(ctx, options.run, options.codexEvents);
   return {
     attach(stream) {
-      if (closed) { stream.destroy(); return; }
+      if (ctx.closed) { stream.destroy(); return; }
       const connection: Connection = { stream, requests: Promise.resolve(), pings: new Map() };
       connections.add(connection);
       stream.on("end", () => { detach(connection); stream.end(); });
@@ -548,7 +309,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
           return;
         }
         connection.requests = connection.requests.then(async () => {
-          if (closed || stream.destroyed || stream.writableEnded) return;
+          if (ctx.closed || stream.destroyed || stream.writableEnded) return;
           let id: string | number | null = null;
           try {
             if (!wire || typeof wire !== "object" || wire.jsonrpc !== "2.0" || !("method" in wire) || typeof wire.method !== "string")
@@ -561,7 +322,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
             if (id !== null) packet(connection, { jsonrpc: "2.0", id, result });
             // end() flushes the response already written before closing a self-detaching socket.
             if (connection.closeAfterResponse) stream.end();
-            if (request.method === "hello" && connection.agent) for (const message of pending(connection.agent)) deliver(message);
+            if (request.method === "hello" && connection.agent) for (const message of store.pending(connection.agent)) ctx.deliver(message);
           } catch (error) {
             const rpc = error as Partial<RpcError>;
             // Never echo request data or tokens, including malformed input.
@@ -576,12 +337,10 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       });
     },
     async close() {
-      if (closed) return;
-      closed = true;
-      await eventIterator?.return?.();
-      await eventTask;
-      for (const server of replyServers.values()) server.close();
-      replyServers.clear();
+      if (ctx.closed) return;
+      ctx.closed = true;
+      await codex.close();
+      claude.close();
       for (const connection of connections) { detach(connection); connection.stream.destroy(); }
       connections.clear(); live.clear(); db.close();
     },
