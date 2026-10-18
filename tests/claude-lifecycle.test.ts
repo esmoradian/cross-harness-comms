@@ -2,6 +2,19 @@ import { expect, test } from "bun:test";
 import { FakeClaude } from "./fakes/claude.ts";
 import { uuid } from "./helpers.ts";
 import { withRig } from "./rig.ts";
+import { registerClaude } from "../adapters/claude/src/index.ts";
+
+test("Claude startup and classic start share one attachment when their hooks overlap", async () => {
+  await withRig(async rig => {
+    const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
+    const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
+    try {
+      await Promise.all([fake.start(), fake.classicStart("startup")]);
+      expect(fake.spawns.filter(call => call.argv[1] === "attach")).toHaveLength(1);
+      expect((await rig.agent("claude", fake.sessionId)).online).toBe(true);
+    } finally { fake.close(); await handle.close(); }
+  });
+});
 
 test("Claude clear ends the old identity and connects the new session without reloading the mod", async () => {
   await withRig(async rig => {

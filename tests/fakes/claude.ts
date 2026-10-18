@@ -242,7 +242,10 @@ export class FakeClaude {
     };
     await end(0, ending);
     this.sessionId = nextId;
-    const starting: ClassicStartEvent = { hook_event_name: "SessionStart", session_id: nextId, cwd: this.cwd, source: "clear" };
+    await this.classicStart("clear");
+  }
+  async classicStart(source: ClassicStartEvent["source"]) {
+    const starting: ClassicStartEvent = { hook_event_name: "SessionStart", session_id: this.sessionId, cwd: this.cwd, source };
     const start = async (i: number, event: ClassicStartEvent): Promise<unknown> => {
       const hook = this.classicStartHandlers[i];
       return hook ? hook(this.api, event, next => start(i + 1, next)) : {};
