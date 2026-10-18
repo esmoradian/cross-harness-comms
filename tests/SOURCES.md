@@ -157,6 +157,13 @@ An independent daemon observer saw `thread/started` for a new unprompted thread;
 - Core lifecycle tests do not open real sockets or harnesses; transport tests do not run real Codex or model turns.
   Neither specifies detach behavior.
 
+## Detach
+
+`tests/detach.test.ts` uses the real client and core over the rig's in-memory streams.
+Self-detach must return `{ ok: true }` before ending the registered connection.
+Detaching another connection must end the owner while leaving the caller usable, including repeated detach of an offline session.
+The compiled-core probe in `internal/probes/validate-core.ts` covers self-detach over a real Unix socket, followed by offline queueing and recovery.
+
 ## Narrow choices for the first specification
 
 - Pi and Codex tool names are `comms_send` and `comms_list`.
