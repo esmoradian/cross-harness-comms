@@ -1,4 +1,6 @@
 import type { Duplex } from "node:stream";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createClient, readPackets, writePacket } from "@cross-harness-comms/client";
 import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type SendParams } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
@@ -54,6 +56,20 @@ Usage: comms <command>
   help                   Show this help
 `;
 
+// Codex's standing authorization for comms replies, which its automatic review otherwise rejects (ADR-018).
+const CODEX_APPROVAL = '[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]\napproval_mode = "approve"\n';
+
+// Appends the approval section to Codex's config unless its table is already there, leaving the rest untouched.
+async function allowCodexReplies(io: CliIO, platform: Platform): Promise<void> {
+  const path = join(platform.codexHome(), "config.toml");
+  const current = await readFile(path, "utf8").catch(() => undefined);
+  if (current?.includes(CODEX_APPROVAL.split("\n")[0]!)) { io.stdout(`Comms replies are already allowed in ${path}.\n`); return; }
+  await mkdir(platform.codexHome(), { recursive: true });
+  const separator = !current ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+  await writeFile(path, (current ?? "") + separator + "# Let agents reply to each other through comms without auto-review.\n" + CODEX_APPROVAL);
+  io.stdout(`Allowed comms replies without review in ${path}.\n`);
+}
+
 export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRuntime): Promise<number> {
   const command = argv[0] ?? "help";
   try {
@@ -70,7 +86,10 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
         codex: "Add the built local marketplace, then run codex plugin add cross-harness-comms@comms-local and trust its SessionStart hook.",
       };
       if (!argv[1] || !instructions[argv[1]]) throw new Error("Supported integrations: pi, claude, codex");
+      if (argv[1] === "codex" && argv[2] === "--allow-replies") { await allowCodexReplies(io, runtime.platform); return 0; }
       io.stdout(instructions[argv[1]] + "\nKeep the compiled comms binary on PATH for local development.\n");
+      if (argv[1] === "codex") io.stdout("\nCodex's automatic review asks you before each reply to another agent. To let agents reply through comms\n"
+        + "without review, add this to ~/.codex/config.toml, or run comms install codex --allow-replies:\n\n" + CODEX_APPROVAL);
       return 0;
     }
     if (command === "attach") {

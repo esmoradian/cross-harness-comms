@@ -13,6 +13,14 @@ function messageId(milliseconds: number): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+// An agent's last activity relative to now, in whole units: `active now`, then minutes, hours, and days (ADR-018).
+function activeAgo(agent: Agent, time: number): string {
+  const minutes = Math.floor((time - Date.parse(agent.active_at ?? agent.last_seen)) / 60_000);
+  if (minutes < 1) return "active now";
+  if (minutes < 60) return `active ${minutes}m ago`;
+  return minutes < 1440 ? `active ${Math.floor(minutes / 60)}h ago` : `active ${Math.floor(minutes / 1440)}d ago`;
+}
+
 export function registerClaude(on: ClaudeOn, options: { binary: string; host: string }): { close(): Promise<void> } {
   let token: string | undefined;
   let sessionId: string | undefined;
@@ -97,7 +105,7 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
                 pending.push(delivery.message.id);
                 pendingReplies.set(delivery.from, pending);
               }
-              const accepted = await $.prompt.submit({ text: formatMessage(delivery) });
+              const accepted = await $.prompt.submit({ text: formatMessage(delivery, "claude") });
               if (stopped || run !== generation) return;
               if ("drop" in accepted) {
                 received.delete(delivery.message.id);
@@ -202,12 +210,13 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     const nativePeers = header.test(original.listing);
     const shown = result.agents.filter(a => a.harness !== "claude" || (!nativePeers && a.session_key !== sessionId));
     for (const a of shown) listed.set(a.name, a.claude_address ?? `comms:${a.name}`);
+    const time = await $.clock!.now();
     const extra = shown
       // Under the native header, rows match native peers; on the native route, Claude
       // sends to a reply socket with its own SendMessage.
       .map(a => nativePeers
-        ? `  ${a.name}  ·  ${a.harness}  ·  ${a.online ? "online" : "offline"}  ·  ${a.cwd}  ·  send to ${a.claude_address ?? `comms:${a.name}`}`
-        : `comms:${a.name} (${a.harness}, ${a.online ? "online" : "offline"}, ${a.cwd})`);
+        ? `  ${a.name}  ·  ${a.harness}  ·  ${a.online ? "online" : "offline"}  ·  ${activeAgo(a, time)}  ·  ${a.cwd}  ·  send to ${a.claude_address ?? `comms:${a.name}`}`
+        : `comms:${a.name} (${a.harness}, ${a.online ? "online" : "offline"}, ${activeAgo(a, time)}, ${a.cwd})`);
     if (!extra.length) return native;
     const listing = original.listing.replace(header, (_, count: string) => `Peer sessions (${Number(count) + extra.length}):`);
     return { result: { ...original, listing: listing + "\n" + extra.join("\n") } };

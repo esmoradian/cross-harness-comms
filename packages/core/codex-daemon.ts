@@ -74,12 +74,11 @@ async function open(address: string, timeoutMs: number) {
   };
 }
 
-interface ThreadRead { thread: { cwd: string; parentThreadId: string | null; ephemeral: boolean } }
+interface ThreadRead { thread: { cwd: string; parentThreadId: string | null; ephemeral: boolean; updatedAt?: number; recencyAt?: number | null } }
 
-// Returns a snapshot reader for the core's Codex poll. Each call opens one short
-// connection; thread details are read once per thread and cached while it stays loaded.
+// Returns a snapshot reader for the core's Codex poll. Each call opens one short connection
+// and reads each loaded thread's metadata, without turns, for its directory and activity time.
 export function codexDaemon(platform: Platform, timeoutMs = 2000): () => Promise<CodexSnapshot | undefined> {
-  const cwds = new Map<string, string | null>();
   return async () => {
     const home = platform.codexHome();
     let client: Awaited<ReturnType<typeof open>>;
@@ -95,17 +94,18 @@ export function codexDaemon(platform: Platform, timeoutMs = 2000): () => Promise
         ids.push(...page.data);
         cursor = page.nextCursor;
       } while (cursor);
+      const threads: CodexSnapshot["threads"] = [];
       for (const id of ids) {
-        if (cwds.has(id)) continue;
         const { thread } = await client.request<ThreadRead>("thread/read", { threadId: id });
         // Subagent and ephemeral threads are Codex internals, not sessions to message.
-        cwds.set(id, thread.parentThreadId || thread.ephemeral ? null : thread.cwd);
+        if (thread.parentThreadId || thread.ephemeral) continue;
+        const seconds = thread.recencyAt ?? thread.updatedAt;
+        threads.push({ id, cwd: thread.cwd, ...(typeof seconds === "number" ? { active_at: new Date(seconds * 1000).toISOString() } : {}) });
       }
-      for (const id of cwds.keys()) if (!ids.includes(id)) cwds.delete(id);
       const daemon = JSON.parse(await readFile(join(home, "app-server-daemon", "daemon.pid"), "utf8")) as { pid: number };
       return {
         executable: await platform.processExecutable(daemon.pid) ?? "codex",
-        threads: ids.flatMap(id => { const cwd = cwds.get(id); return cwd ? [{ id, cwd }] : []; }),
+        threads,
       };
     } catch { return undefined; }
     finally { client.close(); }

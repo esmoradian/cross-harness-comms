@@ -69,8 +69,9 @@ const spawn: Run = async argv => {
 };
 
 export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number; run?: Run;
-  codexDaemon?: () => Promise<CodexSnapshot | undefined>; codexPollMs?: number; nativeAckMs?: number }): Core {
+  codexDaemon?: () => Promise<CodexSnapshot | undefined>; codexPollMs?: number; nativeAckMs?: number; now?: () => number }): Core {
   const policy = options.protocol ?? DEFAULT_POLICY;
+  const now = options.now ?? Date.now;
   const db = new Database(options.databasePath, { create: true });
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS agents (
@@ -97,10 +98,16 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   const replyServers = new Map<string, Server>();
   // Codex threads are online from their SessionStart hook until SessionEnd or a failed delivery (ADR-014).
   const codexOnline = () => new Set((db.query("SELECT agent FROM codex_threads").all() as { agent: string }[]).map(row => row.agent));
+  // Each agent's last activity in epoch milliseconds, kept in memory only; it never moves backward (ADR-018).
+  const activity = new Map<string, number>();
+  const touch = (agent: string, time = now()) => activity.set(agent, Math.max(activity.get(agent) ?? time, time));
   const agents = (): Agent[] => {
     const codex = codexOnline();
     return (db.query("SELECT id, harness, session_key, host, name, cwd, last_seen FROM agents ORDER BY rowid").all() as Omit<Agent, "online">[])
-      .map(agent => ({ ...agent, online: live.has(agent.id) || codex.has(agent.id) }));
+      .map(agent => {
+        const active = activity.get(agent.id);
+        return { ...agent, online: live.has(agent.id) || codex.has(agent.id), active_at: active === undefined ? agent.last_seen : new Date(active).toISOString() };
+      });
   };
   const packet = (connection: Connection, value: WirePacket) => writePacket(connection.stream,
     convert(value, policy.latest, connection.version ?? policy.latest, policy));
@@ -137,7 +144,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       const current = db.query("SELECT state FROM messages WHERE id = ?").get(message.id) as { state: Message["state"] } | null;
       if (!thread || !current || current.state === "acked") return;
       db.query("UPDATE messages SET state = 'delivered' WHERE id = ? AND state = 'queued'").run(message.id);
-      const text = formatMessage(delivery({ ...message, state: "delivered" }));
+      const text = formatMessage(delivery({ ...message, state: "delivered" }), "codex");
       const result = await run([thread.executable, "queue", "--thread", thread.session_key, "--message", text]).catch(() => ({ exitCode: 1 }));
       if (closed) return;
       // Codex accepting the queued message is the ACK; a refusal means the thread is gone.
@@ -232,6 +239,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     if (Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", method: "deliver", params: envelope })) > MAX_LINE_BYTES)
       throw failure("INVALID_MESSAGE", "Delivery line exceeds 1 MB");
     db.query("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, sender, recipient, reply_to ?? null, body, message.created_at, message.state);
+    touch(sender);
     deliver(message);
   };
   const ping = (connection: Connection): Promise<boolean> => new Promise(resolve => {
@@ -268,6 +276,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   };
   const codexStart = (session: SessionRegistration, executable: string): Agent => {
     const agent = upsert(session);
+    touch(agent.id);
     db.query("INSERT OR REPLACE INTO codex_threads (agent, executable) VALUES (?, ?)").run(agent.id, executable);
     for (const message of pending(agent.id)) deliverToCodex(message);
     return agent;
@@ -299,6 +308,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       }
       const token = matches ? suppliedToken as string : randomBytes(32).toString("hex");
       agent = upsert(session, hash(token));
+      touch(agent.id);
       if (previous) {
         detach(previous);
         try { packet(previous, { jsonrpc: "2.0", method: "session_replaced", params: {} }); previous.stream.end(); }
@@ -347,17 +357,18 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         const sender = params.codex_thread === undefined ? authenticated(params) : codexSender(string(params.codex_thread));
         const id = string(params.id);
         if (!uuid.test(id) || typeof params.body !== "string") throw failure("INVALID_MESSAGE");
-        const recipient = resolveAddress(string(params.to), agents()).id;
+        const target = resolveAddress(string(params.to), agents()), recipient = target.id;
+        const to = { name: target.name, online: target.online };
         const reply_to = params.reply_to === undefined ? undefined : string(params.reply_to);
         if (reply_to && !db.query("SELECT id FROM messages WHERE id = ?").get(reply_to)) throw failure("INVALID_MESSAGE", "Unknown reply_to message");
         const existing = db.query("SELECT * FROM messages WHERE id = ?").get(id) as Message | null;
         if (existing) {
           if (existing.sender !== sender || existing.recipient !== recipient || existing.body !== params.body || (existing.reply_to ?? undefined) !== reply_to)
             throw failure("INVALID_MESSAGE", "Message ID already belongs to different content");
-          return { id, state: existing.state };
+          return { id, state: existing.state, ...to };
         }
         store(id, sender, recipient, params.body, reply_to);
-        return db.query("SELECT id, state FROM messages WHERE id = ?").get(id);
+        return { ...db.query("SELECT id, state FROM messages WHERE id = ?").get(id) as object, ...to };
       }
       case "ack": {
         const recipient = authenticated(params), id = string(params.id);
@@ -366,6 +377,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         if (message.recipient !== recipient) throw failure("FORBIDDEN");
         if (message.state === "queued") throw failure("INVALID_MESSAGE", "Message has not been delivered");
         db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(id);
+        touch(recipient);
         return { id, state: "acked" };
       }
       case "native_ack": {
@@ -375,6 +387,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         clearTimeout(inflight.timer);
         delete connection.inflight;
         db.query("UPDATE messages SET state = 'acked' WHERE id = ?").run(inflight.id);
+        touch(agent);
         if (connection.native) for (const message of pending(agent)) if (message.state === "queued") deliver(message);
         return { id: inflight.id };
       }
@@ -418,7 +431,9 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       const loaded = new Set(snapshot.threads.map(thread => thread.id));
       for (const thread of snapshot.threads) {
         const agent = agents().find(a => a.harness === "codex" && a.session_key === thread.id);
-        if (!agent || !online.has(agent.id)) codexStart({ harness: "codex", session_key: thread.id, host: hostname(), cwd: thread.cwd }, snapshot.executable);
+        const started = !agent || !online.has(agent.id)
+          ? codexStart({ harness: "codex", session_key: thread.id, host: hostname(), cwd: thread.cwd }, snapshot.executable) : agent;
+        if (thread.active_at) touch(started.id, Date.parse(thread.active_at));
         daemonThreads.add(thread.id);
       }
       for (const thread of daemonThreads) if (!loaded.has(thread)) { codexEnd(thread); daemonThreads.delete(thread); }
