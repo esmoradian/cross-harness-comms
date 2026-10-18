@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import type { Agent } from "@cross-harness-comms/protocol";
 import { FakeCodex } from "./fakes/codex.ts";
 import { FakeCodexEvents } from "./fakes/codex-events.ts";
@@ -34,6 +35,35 @@ async function sameSession(rig: Rig, agent: Agent, online: boolean) {
   expect(matches).toHaveLength(1);
   expect(matches[0]).toMatchObject({ id: agent.id, name: agent.name, cwd: agent.cwd, online });
 }
+
+test("codex lifecycle: upgrade adds the missing end timestamp while preserving ended sessions and mail", async () => {
+  await withEvents(async (rig, events) => {
+    const { fake, agent } = await started(rig, events);
+    expect((await rig.hook("session-end", fake.sessionEnd())).exitCode).toBe(0);
+    const sender = await rig.harness("pi");
+    await sender.send(`comms:${agent.name}`, "queued before the lifecycle schema upgrade");
+    const message = rig.rows()[0]!;
+    await rig.restart(async () => {
+      // Match the lifecycle table found in the existing shared installation.
+      const db = new Database(rig.databasePath);
+      try { db.exec("ALTER TABLE codex_lifecycle DROP COLUMN ended_at"); }
+      finally { db.close(); }
+    });
+    const db = new Database(rig.databasePath, { readonly: true });
+    try {
+      expect((db.query("PRAGMA table_info(codex_lifecycle)").all() as { name: string }[]).map(row => row.name)).toContain("ended_at");
+    } finally { db.close(); }
+    await events.publish({ method: "comms/daemon-snapshot", executable: "/daemon/codex",
+      params: { threads: [{ id: fake.threadId, cwd: fake.cwd }] } });
+    await sameSession(rig, agent, false);
+    expect(rig.rows()).toMatchObject([{ id: message.id, state: "queued" }]);
+    expect((await rig.hook("session-start", fake.sessionStart())).exitCode).toBe(0);
+    await sameSession(rig, agent, true);
+    await rig.state(message.id, "acked");
+    await rig.restart();
+    expect(rig.rows()).toMatchObject([{ id: message.id, state: "acked" }]);
+  });
+});
 
 test("codex lifecycle: thread/started creates a new available session before any SessionStart hook", async () => {
   await withEvents(async (rig, events) => {
