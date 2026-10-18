@@ -3,10 +3,9 @@ import { existsSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { MAX_LINE_BYTES, VERSION_RANGE } from "@cross-harness-comms/protocol";
-import { cli } from "./fixes-support.ts";
-import { eventually, uuid } from "./helpers.ts";
-import { registration, withRig } from "./rig.ts";
-import { claudeAddress, claudeLine, connectable, deliveries, inboxLine, listWithToken, nativePeer, post, REPLY_SOCKET, settle, socketPath } from "./claude-inbox-support.ts";
+import { eventually, settle, uuid } from "./support/helpers.ts";
+import { cli, registration, withRig } from "./support/rig.ts";
+import { claudeAddress, claudeLine, connectable, deliveries, inboxLine, listWithToken, nativePeer, post, REPLY_SOCKET, socketPath } from "./support/claude.ts";
 
 // These drive the core over its wire protocol, with real Unix sockets for Claude's inbox and the
 // core's reply sockets. The Claude session here is a protocol peer whose inbox runs no hooks,

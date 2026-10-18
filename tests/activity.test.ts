@@ -6,11 +6,11 @@ import { codexDaemon } from "../packages/core/src/codex/daemon.ts";
 import type { Platform } from "../packages/core/src/platform/platform.ts";
 import { createCodexAdapter, type McpResult } from "../adapters/codex/src/index.ts";
 import type { PiToolResult } from "../adapters/pi/src/index.ts";
-import { FakeClaude } from "./fakes/claude.ts";
-import { FakeCodex } from "./fakes/codex.ts";
-import { FakeCodexEvents } from "./fakes/codex-events.ts";
-import { eventually, uuid } from "./helpers.ts";
-import { registration, withRig, type Rig } from "./rig.ts";
+import { FakeClaude } from "./support/fakes/claude.ts";
+import { FakeCodex } from "./support/fakes/codex.ts";
+import { FakeCodexEvents } from "./support/fakes/codex-events.ts";
+import { eventually, uuid } from "./support/helpers.ts";
+import { registration, withRig, type Rig } from "./support/rig.ts";
 
 // ADR-018: every agent carries `active_at`, the time of its last activity, kept in the core's memory.
 // The core sets it on register or reconnect, send, and ACK, and for a Codex thread also from the

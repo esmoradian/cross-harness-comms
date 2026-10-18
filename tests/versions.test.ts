@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { VersionPolicy } from "@cross-harness-comms/protocol";
-import { registration, withRig } from "./rig.ts";
-import { uuid } from "./helpers.ts";
+import { registration, withRig } from "./support/rig.ts";
+import { uuid } from "./support/helpers.ts";
 
 // Artificial versions, not a proposed release schema. The latest fixture shape is the canonical schema.
 // Older fixture clients use legacy_text for bodies, legacy_id for receipt IDs, and label for names.

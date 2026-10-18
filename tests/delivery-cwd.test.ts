@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import type { Harness } from "@cross-harness-comms/protocol";
-import { eventually, uuid } from "./helpers.ts";
-import { registration, withRig } from "./rig.ts";
+import { eventually, uuid } from "./support/helpers.ts";
+import { registration, withRig } from "./support/rig.ts";
 
 // ADR-017: a delivery carries the sender's working directory from its agent record, additive under ADR-005.
 

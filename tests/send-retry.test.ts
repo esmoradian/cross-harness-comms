@@ -1,12 +1,11 @@
 import { expect, test } from "bun:test";
 import type { Harness } from "@cross-harness-comms/protocol";
-import { registration, withRig } from "./rig.ts";
-import { eventually, uuid, uuidV7 } from "./helpers.ts";
-import { cli, sendRequests } from "./fixes-support.ts";
-import { FakeClaude } from "./fakes/claude.ts";
+import { cli, registration, sendRequests, withRig } from "./support/rig.ts";
+import { eventually, uuid, uuidV7 } from "./support/helpers.ts";
+import { FakeClaude } from "./support/fakes/claude.ts";
 
 for (const harness of ["pi", "claude", "codex"] as Harness[]) {
-  test(`fix 3: ${harness} mints UUIDv7 before the first send boundary, with distinct IDs for separate sends`, async () => {
+  test(`${harness} mints UUIDv7 before the first send boundary, with distinct IDs for separate sends`, async () => {
     await withRig(async rig => {
       const sender = await rig.harness(harness), recipient = await rig.harness("pi");
       const before = Date.now();
@@ -28,7 +27,7 @@ for (const harness of ["pi", "claude", "codex"] as Harness[]) {
     });
   });
 
-  test(`fix 3: ${harness} retries an uncertain send with its original ID and stores one message`, async () => {
+  test(`${harness} retries an uncertain send with its original ID and stores one message`, async () => {
     await withRig(async rig => {
       const sender = await rig.harness(harness), recipient = await rig.harness("pi");
       if (sender.fake instanceof FakeClaude) sender.fake.loseNextSendReceipt = true;
@@ -66,7 +65,7 @@ for (const harness of ["pi", "claude", "codex"] as Harness[]) {
   });
 }
 
-test("fix 3: comms send without an id is refused and stores no message", async () => {
+test("comms send without an id is refused and stores no message", async () => {
   await withRig(async rig => {
     const a = await (await rig.peer()).register(registration("pi"));
     const b = await (await rig.peer()).register(registration("codex"));
@@ -78,7 +77,7 @@ test("fix 3: comms send without an id is refused and stores no message", async (
   });
 });
 
-test("fix 3: retrying comms send with an explicit id returns the same receipt and stores once", async () => {
+test("retrying comms send with an explicit id returns the same receipt and stores once", async () => {
   await withRig(async rig => {
     const a = await (await rig.peer()).register(registration("pi"));
     const b = await (await rig.peer()).register(registration("codex"));
@@ -93,7 +92,7 @@ test("fix 3: retrying comms send with an explicit id returns the same receipt an
   });
 });
 
-test("fix 3: comms send exits 2 when the core rejects the send, so callers know not to retry", async () => {
+test("comms send exits 2 when the core rejects the send, so callers know not to retry", async () => {
   await withRig(async rig => {
     const a = await (await rig.peer()).register(registration("pi"));
     const result = await cli(rig, "send", { token: a.token, id: uuid(), to: "comms:nobody", body: "No such agent" });
@@ -102,7 +101,7 @@ test("fix 3: comms send exits 2 when the core rejects the send, so callers know 
   });
 });
 
-test("fix 3: claude does not retry a send the core rejected", async () => {
+test("claude does not retry a send the core rejected", async () => {
   await withRig(async rig => {
     const sender = await rig.harness("claude");
     const fake = sender.fake as FakeClaude;

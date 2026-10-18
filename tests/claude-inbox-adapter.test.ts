@@ -2,23 +2,15 @@ import { expect, test } from "bun:test";
 import { basename, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Harness, HelloParams, Message } from "@cross-harness-comms/protocol";
-import { FakeClaude } from "./fakes/claude.ts";
-import { helloRequests } from "./fixes-support.ts";
-import { eventually, uuidV7 } from "./helpers.ts";
-import { withRig, type HarnessSession, type Rig } from "./rig.ts";
-import { expectedContent } from "./pi-card-support.ts";
-import { expectedClaudeText, expectedCodexText } from "./text-support.ts";
-import { attachToken, claudeAddress, claudeLine, inboxLine, listWithToken, post, REPLY_SOCKET, runsOf, settle, socketPath } from "./claude-inbox-support.ts";
+import { eventually, settle, uuidV7 } from "./support/helpers.ts";
+import { helloRequests, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
+import { expectedContent } from "./support/pi-card.ts";
+import { expectedClaudeText, expectedCodexText } from "./support/text.ts";
+import { attachToken, claudeAddress, claudeLine, inboxLine, listWithToken, nativeClaude, peerSessions, post, REPLY_SOCKET, runsOf,
+  socketPath } from "./support/claude.ts";
 
 // These run the real Claude adapter in the fake mods host, the real core, and real Unix sockets
 // for Claude's inbox and the core's reply sockets. The fake inbox runs session.receive like Claude.
-
-const peerSessions = "This session is Cross-harness communications naming [2a1458] ...\n\nPeer sessions (1):\n  comms-test-8b [c14715]  ·  interactive  ·  idle  ·  started 45m ago";
-
-async function nativeClaude(rig: Rig, options: { listen?: boolean; version?: string } = {}) {
-  const session = await rig.harness("claude", undefined, undefined, { claude: options });
-  return { session, fake: session.fake as FakeClaude };
-}
 
 // The text a message gets on the comms path, from the stored row: Claude's fallback text,
 // or Codex's when Codex receives it (ADR-018).
@@ -141,12 +133,13 @@ test("native claude: a late native ACK after the fallback is honored, and the ad
     expect(nativeAck.result.exitCode).toBe(0);
     expect(JSON.parse(nativeAck.result.stdout)).toEqual({ id: line.msg_id });
     await rig.state(line.msg_id, "acked");
-    await settle();
+    // session.receive finishes after the adapter records the native ACK's message ID.
+    await eventually(() => fake.receipts, receipts => expect(receipts).toHaveLength(1));
 
     fake.releaseAttachOutput();
+    // The adapter ACKs a comms copy only after submitting it, or instead of submitting it.
     await eventually(() => runsOf(fake, "ack"), runs => expect(runs).toHaveLength(1));
     expect(JSON.parse(runsOf(fake, "ack")[0]!.init?.stdin ?? "{}")).toEqual({ token: attachToken(fake), id: line.msg_id });
-    await settle();
     expect(fake.incoming).toEqual([]);
     expect(fake.queued).toHaveLength(1);
     await rig.state(line.msg_id, "acked");
@@ -269,36 +262,4 @@ test("native claude: ListAgents goes back to comms addresses once the native rou
     expect(listing.split("\n").find(line => line.includes(`comms:${codex.agent.name}`))).toStartWith("  ");
     expect(listing).not.toContain("uds:");
   }, undefined, { nativeAckMs: 50 });
-});
-
-test("native claude: SendMessage to a bare name ListAgents showed goes to that agent's address", async () => {
-  await withRig(async rig => {
-    const pi = await rig.harness("pi");
-    const { session: claude, fake } = await nativeClaude(rig);
-    fake.nativeListing = peerSessions;
-    await claude.list();
-    const address = await claudeAddress(rig, attachToken(fake), pi.agent.id);
-    await claude.send(pi.agent.name, "By name");
-    expect(fake.nativeCalls.at(-1)).toMatchObject({ tool: "SendMessage", to: address, message: "By name" });
-    // A name the core does not know, such as a native peer's, passes through untouched.
-    await claude.send("comms-test-8b", "Native peer");
-    expect(fake.nativeCalls.at(-1)).toMatchObject({ tool: "SendMessage", to: "comms-test-8b" });
-    // Every bare name is resolved through the core, not from the listing (HANDOFF-FIXES-2 fix 1).
-    expect(runsOf(fake, "resolve").map(run => JSON.parse(run.init?.stdin ?? "{}").name)).toEqual([pi.agent.name, "comms-test-8b"]);
-  });
-});
-
-test("native claude: once the native route is off, a bare listed name is sent through comms", async () => {
-  await withRig(async rig => {
-    const pi = await rig.harness("pi");
-    const { session: claude, fake } = await nativeClaude(rig, { version: "2.1.288" });
-    fake.nativeListing = peerSessions;
-    await claude.list();
-    const calls = fake.nativeCalls.length;
-    await claude.send(pi.agent.name, "By name through comms");
-    await eventually(pi.incoming, texts => expect(texts.at(-1)).toContain("By name through comms"));
-    expect(fake.nativeCalls.slice(calls).filter(call => call.tool === "SendMessage")).toEqual([]);
-    // Resolved through the core, not from the listing (HANDOFF-FIXES-2 fix 1).
-    expect(runsOf(fake, "resolve").map(run => JSON.parse(run.init?.stdin ?? "{}").name)).toEqual([pi.agent.name]);
-  });
 });

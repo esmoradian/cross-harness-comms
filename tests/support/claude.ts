@@ -3,9 +3,8 @@ import { randomUUID } from "node:crypto";
 import { expect } from "bun:test";
 import { VERSION_RANGE, type Agent, type Delivery, type SessionRegistration } from "@cross-harness-comms/protocol";
 import { CLAUDE_VERSION, FakeClaude, type FakeClaudeInbox } from "./fakes/claude.ts";
-import { cli } from "./fixes-support.ts";
-import { eventually, type Peer } from "./helpers.ts";
-import { registration, type Rig } from "./rig.ts";
+import { eventually, uuid, type Peer } from "./helpers.ts";
+import { cli, registration, type HarnessSession, type NativeClaudeOptions, type Rig } from "./rig.ts";
 
 export const REPLY_SOCKET = /^9\d{9}\.sock$/;
 
@@ -93,5 +92,18 @@ export function runsOf(fake: FakeClaude, command: string) {
   return fake.runs.filter(run => run.argv[1] === command);
 }
 
-// Waits long enough for a wrongly written line or delivery to show up before asserting its absence.
-export const settle = () => Bun.sleep(50);
+// Claude Code's native ListAgents output when its own peer messaging is on.
+export const peerSessions = "This session is Cross-harness communications naming [2a1458] ...\n\nPeer sessions (1):\n  comms-test-8b [c14715]  ·  interactive  ·  idle  ·  started 45m ago";
+
+// A Claude session whose native route is on: an inbox socket and, unless `version` says otherwise, a tested Claude version (ADR-016).
+export async function nativeClaude(rig: Rig, options: NativeClaudeOptions = {}) {
+  const session = await rig.harness("claude", undefined, undefined, { claude: options });
+  return { session, fake: session.fake as FakeClaude };
+}
+
+// Claude's native tool has no reply_to parameter. No envelope is synthesized by this driver.
+export async function claudeSend(session: HarnessSession, to: string, message: string) {
+  const result = await (session.fake as FakeClaude).tool({ tool: "SendMessage", tool_use_id: uuid(), to, message });
+  expect(result).not.toHaveProperty("deny");
+  return result;
+}

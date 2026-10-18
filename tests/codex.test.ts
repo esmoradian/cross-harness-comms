@@ -1,39 +1,13 @@
 import { expect, test } from "bun:test";
 import { createCodexAdapter } from "../adapters/codex/src/index.ts";
-import { FakeCodex } from "./fakes/codex.ts";
-import { eventually, uuid } from "./helpers.ts";
-import { withRig, type Rig } from "./rig.ts";
+import { FakeCodex } from "./support/fakes/codex.ts";
+import { eventually, uuid } from "./support/helpers.ts";
+import { withRig, type Rig } from "./support/rig.ts";
 
 // ADR-014: Codex presence comes from its hooks, the core delivers through
 // `codex queue`, and one MCP server acts for whichever thread `_meta` names.
 
 const online = async (rig: Rig, id: string) => (await rig.agents()).find(a => a.id === id)?.online;
-
-test("codex: SessionStart registers the thread online and SessionEnd marks it offline", async () => {
-  await withRig(async rig => {
-    const codex = await rig.harness("codex");
-    expect(await online(rig, codex.agent.id)).toBe(true);
-    expect((await rig.hook("session-end", (codex.fake as FakeCodex).sessionEnd())).exitCode).toBe(0);
-    expect(await online(rig, codex.agent.id)).toBe(false);
-  });
-});
-
-test("codex: messages to an ended thread queue, then arrive in order on the next SessionStart", async () => {
-  await withRig(async rig => {
-    const sender = await rig.harness("pi"), codex = await rig.harness("codex");
-    const fake = codex.fake as FakeCodex;
-    await rig.hook("session-end", fake.sessionEnd());
-    await sender.send(`comms:${codex.agent.name}`, "first");
-    await sender.send(`comms:${codex.agent.name}`, "second");
-    expect(fake.commands).toHaveLength(0);
-    expect(rig.rows().map(row => row.state)).toEqual(["queued", "queued"]);
-    expect((await rig.hook("session-start", fake.sessionStart())).exitCode).toBe(0);
-    await eventually(() => rig.rows(), rows => expect(rows.map(row => row.state)).toEqual(["acked", "acked"]));
-    expect(fake.commands.map(argv => argv.slice(0, 4))).toEqual([0, 1].map(() => ["codex", "queue", "--thread", codex.sessionId]));
-    expect(codex.incoming()[0]).toContain("first");
-    expect(codex.incoming()[1]).toContain("second");
-  });
-});
 
 test("codex: a failed codex queue marks the thread offline and keeps the message for the next SessionStart", async () => {
   await withRig(async rig => {

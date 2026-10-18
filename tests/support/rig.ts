@@ -8,15 +8,15 @@ import { expect } from "bun:test";
 import { createCore, type Core } from "@cross-harness-comms/core";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
-import type { Agent, Harness, Message, SessionRegistration, VersionPolicy, WirePacket } from "@cross-harness-comms/protocol";
-import { registerPi } from "../adapters/pi/src/index.ts";
-import { registerClaude } from "../adapters/claude/src/index.ts";
-import { createCodexAdapter } from "../adapters/codex/src/index.ts";
+import { VERSION_RANGE, type Agent, type Harness, type Message, type SessionRegistration, type VersionPolicy, type WirePacket } from "@cross-harness-comms/protocol";
+import { registerPi } from "../../adapters/pi/src/index.ts";
+import { registerClaude } from "../../adapters/claude/src/index.ts";
+import { createCodexAdapter } from "../../adapters/codex/src/index.ts";
 import { FakePi } from "./fakes/pi.ts";
 import { CLAUDE_VERSION, FakeClaude, FakeClaudeInbox } from "./fakes/claude.ts";
 import { FakeCodex } from "./fakes/codex.ts";
 import type { CodexEvent } from "./fakes/codex-events.ts";
-import { eventually, memoryPair, Peer, uuid } from "./helpers.ts";
+import { deferred, eventually, memoryPair, Peer, uuid } from "./helpers.ts";
 
 export interface HarnessSession {
   harness: Harness;
@@ -84,10 +84,7 @@ export class Rig {
   };
   // Runs a Codex hook through the same CLI handler the plugin's hook command uses.
   async hook(command: "session-start" | "session-end", input: unknown) {
-    let stderr = "";
-    async function* stdin() { yield JSON.stringify(input) + "\n"; }
-    const exitCode = await runCli([command], { stdin: stdin(), signal: new AbortController().signal,
-      stdout: () => {}, stderr: text => { stderr += text; } }, this.cliRuntime());
+    const { exitCode, stderr } = await cli(this, command, input);
     return { exitCode, stderr };
   }
   connect = async (_address = "memory://comms"): Promise<Duplex> => {
@@ -253,4 +250,58 @@ export async function withRig(run: (rig: Rig) => Promise<void>, protocol?: Versi
 
 export function registration(harness: Harness, session_key = uuid(), cwd = "/projects/shared"): SessionRegistration {
   return { harness, session_key, cwd, host: "fixture-host" };
+}
+
+async function* input(params: unknown) { if (params !== undefined) yield JSON.stringify(params) + "\n"; }
+
+// Runs a `comms` subcommand through the same CLI handler the binary uses, with process I/O held in memory.
+export async function cli(rig: Rig, command: string | string[], params?: unknown) {
+  let stdout = "", stderr = "";
+  const exitCode = await runCli(typeof command === "string" ? [command] : command, {
+    stdin: input(params), signal: new AbortController().signal,
+    stdout: text => { stdout += text; }, stderr: text => { stderr += text; },
+  }, rig.cliRuntime());
+  return { exitCode, stdout, stderr };
+}
+
+// Runs `comms attach` as an agent's shell or Claude's mod would. `response` is its first stdout
+// packet, or its exit if it prints none; it runs until it exits on its own, `abort`, or `close`.
+export function attach(rig: Rig, session: SessionRegistration, token?: string) {
+  const abort = new AbortController();
+  const response = deferred<WirePacket | { exitCode: number; stderr: string }>();
+  let stdout = "", stderr = "", exited = false;
+  const done = runCli(["attach"], {
+    stdin: input({ versions: VERSION_RANGE, session, ...(token === undefined ? {} : { token }) }),
+    signal: abort.signal, stderr: text => { stderr += text; },
+    stdout: text => {
+      stdout += text;
+      const newline = stdout.indexOf("\n");
+      if (newline >= 0) response.resolve(JSON.parse(stdout.slice(0, newline)) as WirePacket);
+    },
+  }, rig.cliRuntime());
+  void done.then(exitCode => { exited = true; response.resolve({ exitCode, stderr }); }, response.reject);
+  return { response: response.promise, done, exited: () => exited, abort: () => abort.abort(), async close() { abort.abort(); await done; } };
+}
+
+export function helloRequests(rig: Rig, harness: Harness, session_key: string) {
+  return rig.traffic.filter(entry => {
+    if (entry.direction !== "to-core" || !("method" in entry.packet) || entry.packet.method !== "hello") return false;
+    const params = entry.packet.params as { session?: SessionRegistration };
+    return params.session?.harness === harness && params.session.session_key === session_key;
+  });
+}
+
+export function sendRequests(rig: Rig) {
+  return rig.traffic.flatMap(entry => entry.direction === "to-core" && "method" in entry.packet && entry.packet.method === "send"
+    ? [entry.packet.params as { id?: string; token?: string; body: string; reply_to?: string; to: string }] : []);
+}
+
+// Sends `text` from one session to another and waits until the receiver has it and the core has its ACK.
+export async function receive(rig: Rig, from: HarnessSession, to: HarnessSession, text: string) {
+  const count = to.incoming().length;
+  await from.send(`comms:${to.agent.name}`, text);
+  await eventually(to.incoming, messages => expect(messages).toHaveLength(count + 1));
+  const message = rig.rows().at(-1)!;
+  await rig.state(message.id, "acked");
+  return message;
 }

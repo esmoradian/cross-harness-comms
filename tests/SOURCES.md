@@ -1,6 +1,6 @@
 # Harness fake sources and test contract
 
-These unit fakes reproduce only the host APIs the adapters use.
+These unit fakes, in `tests/support/fakes/`, reproduce only the host APIs the adapters use.
 They record calls and delegate transport to product code; they do not route messages or maintain mailboxes themselves.
 The first-pass scaffold used throwing exports; the current suite also specifies the first prototype's review fixes.
 
@@ -97,11 +97,15 @@ Sources: the observations of interactive Claude Code 2.1.289 sessions on 2026-10
 
 ### Bare names (HANDOFF-FIXES-2 fix 1)
 
+These are specified in `claude-resolve.test.ts`.
+
 - Every `SendMessage` whose `to` does not start with `comms:` or `uds:` is resolved with `comms resolve`, which reads `{ token?, name, skip_claude? }` as JSON on stdin like `comms list` and prints `{ agent }`.
 - "Native peer messaging is on" is detected from `CLAUDE_CODE_MESSAGING_SOCKET` at session start.
   The `Peer sessions (N):` section controls where comms peers are appended in `ListAgents`, not whether bare-name resolution skips native Claude peers.
 
 ## Parent watch (HANDOFF-FIXES-2 fix 4)
+
+These are specified in `attach-parent.test.ts`.
 
 - The platform module's `watchParent(onGone)` calls `onGone` once the process that started this one is gone and returns a function that stops watching.
 - The rig's platform records each call in `parentWatchers`; a test calls `gone()` to report the parent gone, and `stopped` shows whether the CLI stopped watching.
@@ -167,13 +171,13 @@ Claude lifecycle tests use the generated 2.1.289 `SessionEndInput` and `ClassicE
 `session.end` reports the old ID and reason; `classic.SessionStart` reports the replacement native ID after clear.
 The fake emits those events and changes its host session ID; registration, disconnect, tokens, and mailboxes remain product code.
 
-- `holdRun(command)` holds the next `$.process.run` of that command after recording it in `runs`, and `release(error?)` lets it run or makes it reject; the review fix 1 tests hold `ensure` to keep a start in flight.
+- `holdRun(command)` holds the next `$.process.run` of that command after recording it in `runs`, and `release(error?)` lets it run or makes it reject; the concurrent-start tests in `claude-lifecycle.test.ts` hold `ensure` to keep a start in flight.
   A rejected run stands in for a `comms` binary that fails to start, as `faults` does.
-- `settle()` in `tests/helpers.ts` waits one macrotask, so hooks already started reach their next real wait; while `ensure` is held every other fake step is a microtask, so this is ordering, not timing.
+- `settle()` in `tests/support/helpers.ts` waits one macrotask, so hooks already started reach their next real wait; while `ensure` is held every other fake step is a microtask, so this is ordering, not timing.
 - Starts and attachments are counted from the `ensure` entries in `runs` and the `attach` entries in `spawns`.
 - `end(reason)` runs the `session.end` chain for the current ID on its own; `clear(nextId)` is `end("clear")`, the ID change, and `classicStart("clear")`.
 - `holdReceive()` holds the innermost `next` of the next `session.receive` chain before it queues the delivery, with `entered` and `release()` like `holdRun`; several holds queue in order.
-- The review fix 2 tests in `claude-generation.test.ts` hold `detach`, `send`, `ensure`, `prompt.submit` (through `acceptGate`), and `session.receive`'s `next`, and fire a scheduled attach retry with `runScheduled()`, so every interleaving is set by a hold or the fake clock, not by timing.
+- The tests in `claude-generation.test.ts` hold `detach`, `send`, `ensure`, `prompt.submit` (through `acceptGate`), and `session.receive`'s `next`, and fire a scheduled attach retry with `runScheduled()`, so every interleaving is set by a hold or the fake clock, not by timing.
   A retry is scheduled by destroying the attachment's in-memory link and awaiting that child's `spawnResults` entry.
 
 ## Detach

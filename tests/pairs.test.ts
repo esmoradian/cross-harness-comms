@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import type { Harness, Message } from "@cross-harness-comms/protocol";
 import type { ToolEvent } from "../adapters/claude/src/api.ts";
-import { FakeClaude } from "./fakes/claude.ts";
-import { FakeCodex } from "./fakes/codex.ts";
-import { FakePi } from "./fakes/pi.ts";
-import { eventually, uuidV7 } from "./helpers.ts";
-import { expectedContent } from "./pi-card-support.ts";
-import { expectedClaudeText, expectedCodexText, SENDER_HEADER } from "./text-support.ts";
-import { withRig, type HarnessSession } from "./rig.ts";
+import { FakeClaude } from "./support/fakes/claude.ts";
+import { FakeCodex } from "./support/fakes/codex.ts";
+import { FakePi } from "./support/fakes/pi.ts";
+import { eventually, uuidV7 } from "./support/helpers.ts";
+import { expectedContent } from "./support/pi-card.ts";
+import { expectedClaudeText, expectedCodexText, SENDER_HEADER } from "./support/text.ts";
+import { withRig, type HarnessSession } from "./support/rig.ts";
 
 const harnesses: Harness[] = ["pi", "claude", "codex"];
 

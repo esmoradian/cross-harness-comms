@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { createCodexAdapter } from "../adapters/codex/src/index.ts";
 import type { Harness } from "@cross-harness-comms/protocol";
-import { FakeClaude } from "./fakes/claude.ts";
-import { FakeCodex } from "./fakes/codex.ts";
-import { deferred, eventually, uuid } from "./helpers.ts";
-import { registration, withRig } from "./rig.ts";
+import { FakeClaude } from "./support/fakes/claude.ts";
+import { FakeCodex } from "./support/fakes/codex.ts";
+import { deferred, eventually, uuid } from "./support/helpers.ts";
+import { registration, withRig } from "./support/rig.ts";
 
 for (const harness of ["pi", "claude", "codex"] as Harness[]) {
   test(`invariant 2: ${harness} derives sender identity from its native session, ignoring tool identity fields`, async () => {

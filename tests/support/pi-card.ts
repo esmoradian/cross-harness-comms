@@ -1,7 +1,8 @@
 import { expect } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import type { CommsMessageDetails, PiAPI, PiTheme } from "../adapters/pi/src/index.ts";
+import type { CommsMessageDetails, PiAPI, PiTheme } from "../../adapters/pi/src/index.ts";
 import type { FakePi } from "./fakes/pi.ts";
+import { withRig } from "./rig.ts";
 
 // The model-facing Markdown of a `comms_message` (ADR-017).
 export function expectedContent(details: Omit<CommsMessageDetails, "from">): string {
@@ -79,6 +80,11 @@ export function plain(lines: string[]): string[] {
 export const top = (header: string, inner: number) => `╭${header}${"─".repeat(inner - header.length)}╮`;
 export const row = (text: string, inner: number) => `│${text}${" ".repeat(inner - text.length)}│`;
 export const bottom = (inner: number) => `╰${"─".repeat(inner)}╯`;
+
+// Runs with the fake Pi host of a Pi session attached to a fresh rig.
+export async function withPi(run: (fake: FakePi) => void | Promise<void>) {
+  await withRig(async rig => { await run((await rig.harness("pi")).fake as FakePi); });
+}
 
 export function rendererOf(fake: FakePi) {
   const renderer = fake.renderers.get("comms_message");

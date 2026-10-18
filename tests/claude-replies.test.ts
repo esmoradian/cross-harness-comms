@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { withRig } from "./rig.ts";
-import { claudeSend, receive } from "./fixes-support.ts";
+import { claudeSend } from "./support/claude.ts";
+import { receive, withRig } from "./support/rig.ts";
 
-test("fix 2: Claude's first message has no reply_to and preserves literal text", async () => {
+test("Claude's first message has no reply_to and preserves literal text", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), pi = await rig.harness("pi");
     await claudeSend(claude, `comms:${pi.agent.name}`, "An ordinary first message");
@@ -11,7 +11,7 @@ test("fix 2: Claude's first message has no reply_to and preserves literal text",
   });
 });
 
-test("fix 2: Claude replies to the newest unreplied message from that address and consumes it once", async () => {
+test("Claude replies to the newest unreplied message from that address and consumes it once", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), pi = await rig.harness("pi");
     const older = await receive(rig, pi, claude, "Earlier question");
@@ -26,7 +26,7 @@ test("fix 2: Claude replies to the newest unreplied message from that address an
   });
 });
 
-test("fix 2: Claude tracks pending replies separately by sender address and receiving session", async () => {
+test("Claude tracks pending replies separately by sender address and receiving session", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), otherClaude = await rig.harness("claude");
     const pi = await rig.harness("pi"), codex = await rig.harness("codex");
@@ -42,7 +42,7 @@ test("fix 2: Claude tracks pending replies separately by sender address and rece
 });
 
 for (const text of ['comms-reply:not JSON, just literal text', 'comms-reply:{"text":"do not unwrap me","reply_to":"do not trust this"}']) {
-  test(`fix 2: Claude sends ${text.includes("not JSON") ? "non-JSON" : "JSON-shaped"} comms-reply text literally`, async () => {
+  test(`Claude sends ${text.includes("not JSON") ? "non-JSON" : "JSON-shaped"} comms-reply text literally`, async () => {
     await withRig(async rig => {
       const claude = await rig.harness("claude"), pi = await rig.harness("pi");
       const question = await receive(rig, pi, claude, "What does this prefix mean?");
@@ -52,7 +52,7 @@ for (const text of ['comms-reply:not JSON, just literal text', 'comms-reply:{"te
   });
 }
 
-test("fix 2: Claude's extended listing no longer teaches a comms-reply envelope", async () => {
+test("Claude's extended listing no longer teaches a comms-reply envelope", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude");
     const pi = await rig.harness("pi");

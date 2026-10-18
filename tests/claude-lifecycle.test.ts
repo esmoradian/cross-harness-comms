@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { FakeClaude } from "./fakes/claude.ts";
-import { settle, uuid } from "./helpers.ts";
-import { withRig } from "./rig.ts";
+import { FakeClaude } from "./support/fakes/claude.ts";
+import { settle, uuid } from "./support/helpers.ts";
+import { withRig } from "./support/rig.ts";
 import { registerClaude } from "../adapters/claude/src/index.ts";
 
 test("Claude startup and classic start share one attachment when their hooks overlap", async () => {
@@ -38,7 +38,7 @@ test("Claude clear ends the old identity and connects the new session without re
 const attaches = (fake: FakeClaude) => fake.spawns.filter(call => call.argv[1] === "attach");
 const ensures = (fake: FakeClaude) => fake.runs.filter(call => call.argv[1] === "ensure");
 
-test("review fix 1: a failed first start wakes two waiting classic starts and exactly one of them starts", async () => {
+test("a failed first start wakes two waiting classic starts and exactly one of them starts", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
     const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
@@ -60,7 +60,7 @@ test("review fix 1: a failed first start wakes two waiting classic starts and ex
   });
 });
 
-test("review fix 1: two concurrent classic starts after a native ID change add exactly one attachment", async () => {
+test("two concurrent classic starts after a native ID change add exactly one attachment", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
     const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
@@ -77,7 +77,7 @@ test("review fix 1: two concurrent classic starts after a native ID change add e
   });
 });
 
-test("review fix 1: a waiting classic start reads the native ID after the wait and connects the new ID", async () => {
+test("a waiting classic start reads the native ID after the wait and connects the new ID", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
     const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
@@ -99,7 +99,7 @@ test("review fix 1: a waiting classic start reads the native ID after the wait a
   });
 });
 
-test("review fix 1: a classic start during an in-flight startup shares its single attachment", async () => {
+test("a classic start during an in-flight startup shares its single attachment", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
     const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });

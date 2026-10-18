@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import type { Harness } from "@cross-harness-comms/protocol";
-import { FakePi } from "./fakes/pi.ts";
-import { eventually, uuid } from "./helpers.ts";
-import { bottom, expectedContent, plain, renderLines, row, top } from "./pi-card-support.ts";
-import { withRig } from "./rig.ts";
+import { FakePi } from "./support/fakes/pi.ts";
+import { eventually, uuid } from "./support/helpers.ts";
+import { bottom, expectedContent, plain, renderLines, row, top } from "./support/pi-card.ts";
+import { withRig } from "./support/rig.ts";
 
 // ADR-017: every harness delivers into Pi as a `comms_message` that steers a busy session and starts a turn in an idle one.
 

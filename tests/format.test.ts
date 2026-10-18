@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { FakeClaude } from "./fakes/claude.ts";
-import { FakeCodex } from "./fakes/codex.ts";
-import { claudeSend, receive } from "./fixes-support.ts";
-import { eventually, uuid } from "./helpers.ts";
-import { withRig } from "./rig.ts";
+import { FakeClaude } from "./support/fakes/claude.ts";
+import { FakeCodex } from "./support/fakes/codex.ts";
+import { claudeSend } from "./support/claude.ts";
+import { eventually, uuid } from "./support/helpers.ts";
+import { receive, withRig } from "./support/rig.ts";
 
 // ADR-018: Codex, and Claude on the comms fallback route, receive Claude-style text: a header naming
 // the sender as another agent, the body verbatim, and a reply hint naming the harness's own send tool,

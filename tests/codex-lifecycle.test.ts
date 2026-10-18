@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { Agent } from "@cross-harness-comms/protocol";
-import { FakeCodex } from "./fakes/codex.ts";
-import { FakeCodexEvents } from "./fakes/codex-events.ts";
-import { uuid } from "./helpers.ts";
-import { withRig, type Rig } from "./rig.ts";
+import { FakeCodex } from "./support/fakes/codex.ts";
+import { FakeCodexEvents } from "./support/fakes/codex-events.ts";
+import { uuid } from "./support/helpers.ts";
+import { withRig, type Rig } from "./support/rig.ts";
 
 // Tests only: codexEvents is the proposed sequential event input to createCore.
 // No new protocol method, daemon polling, real sockets, or harness processes.
@@ -101,15 +101,17 @@ test("codex lifecycle: SessionEnd keeps the session and mailbox, and messages wa
     expect((await rig.hook("session-end", fake.sessionEnd())).exitCode).toBe(0);
     await sameSession(rig, agent, false);
     const sender = await rig.harness("pi");
-    await sender.send(`comms:${agent.name}`, "wait for the same session");
-    const message = rig.rows()[0]!;
-    expect(message.recipient).toBe(agent.id);
-    expect(message.state).toBe("queued");
+    await sender.send(`comms:${agent.name}`, "first, waiting for the same session");
+    await sender.send(`comms:${agent.name}`, "second, waiting for the same session");
+    const messages = rig.rows();
+    expect(messages.map(row => [row.recipient, row.state])).toEqual([[agent.id, "queued"], [agent.id, "queued"]]);
     expect(fake.commands).toHaveLength(0);
     expect((await rig.hook("session-start", fake.sessionStart())).exitCode).toBe(0);
     await sameSession(rig, agent, true);
-    await rig.state(message.id, "acked");
-    expect(fake.commands).toHaveLength(1);
+    for (const message of messages) await rig.state(message.id, "acked");
+    // Delivered in order, through the executable the SessionStart hook reported.
+    expect(fake.commands.map(argv => argv.slice(0, 4))).toEqual([0, 1].map(() => ["codex", "queue", "--thread", fake.threadId]));
+    expect(fake.commands.map(argv => argv.at(-1))).toEqual([expect.stringContaining("first"), expect.stringContaining("second")]);
   });
 });
 

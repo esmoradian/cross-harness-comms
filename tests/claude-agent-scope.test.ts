@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { FakeClaude } from "./fakes/claude.ts";
-import { uuid } from "./helpers.ts";
-import { withRig } from "./rig.ts";
+import { FakeClaude } from "./support/fakes/claude.ts";
+import { uuid } from "./support/helpers.ts";
+import { withRig } from "./support/rig.ts";
 
 // Native model.fork passes tool.call an agentId absent from $.agent.list(), and
 // its downstream permission path refuses tools even though it inherits schemas.

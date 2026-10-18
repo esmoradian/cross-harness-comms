@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:net";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 import type { ClaudeAPI, ClaudeOn, HookStream, ProcessRunInit, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, PromptInput,
-  SessionReceiveInput, SessionReceiveOrigin, SessionReceiveResult, SessionVersion, StartEvent, EndEvent, ClassicStartEvent, ToolEvent, ToolResult } from "../../adapters/claude/src/api.ts";
+  SessionReceiveInput, SessionReceiveOrigin, SessionReceiveResult, SessionVersion, StartEvent, EndEvent, ClassicStartEvent, ToolEvent, ToolResult } from "../../../adapters/claude/src/api.ts";
 import { deferred, Queue } from "../helpers.ts";
 
 type ToolHandler = ($: ClaudeAPI, event: ToolEvent, next: (event: ToolEvent) => Promise<ToolResult>) => Promise<ToolResult>;

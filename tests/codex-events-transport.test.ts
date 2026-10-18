@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { watchCodexDaemon as watch } from "../packages/core/src/codex/daemon.ts";
 import type { CodexEvent } from "../packages/core/src/codex/events.ts";
 import type { Platform } from "../packages/core/src/platform/platform.ts";
-import { eventually } from "./helpers.ts";
+import { eventually } from "./support/helpers.ts";
 
 function fixture(duringRead?: (send: (event: unknown) => void) => void) {
   const home = mkdtempSync("/tmp/cxe-");

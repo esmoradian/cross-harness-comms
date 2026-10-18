@@ -1,4 +1,4 @@
-import type { McpCall, SessionEndInput, SessionStartInput } from "../../adapters/codex/src/index.ts";
+import type { McpCall, SessionEndInput, SessionStartInput } from "../../../adapters/codex/src/index.ts";
 
 export type CodexRun = (argv: readonly string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 

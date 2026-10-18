@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test";
-import { FakeClaude } from "./fakes/claude.ts";
-import { helloRequests } from "./fixes-support.ts";
-import { runsOf } from "./claude-inbox-support.ts";
-import { deferred, eventually, settle, uuid } from "./helpers.ts";
-import { registration, withRig, type HarnessSession, type Rig } from "./rig.ts";
+import { FakeClaude } from "./support/fakes/claude.ts";
+import { runsOf } from "./support/claude.ts";
+import { deferred, eventually, settle, uuid } from "./support/helpers.ts";
+import { helloRequests, registration, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 import { registerClaude } from "../adapters/claude/src/index.ts";
 
 // Each test holds one async step of an older run with a fake hook or the fake clock, changes
@@ -32,7 +31,7 @@ async function dropAttachment(rig: Rig, claude: HarnessSession) {
 }
 
 for (const ending of ["session.end", "/clear"] as const) {
-  test(`review fix 2: an attach retry scheduled before ${ending} spawns nothing when its timer fires`, async () => {
+  test(`an attach retry scheduled before ${ending} spawns nothing when its timer fires`, async () => {
     await withRig(async rig => {
       const claude = await rig.harness("claude");
       const fake = claude.fake as FakeClaude;
@@ -51,7 +50,7 @@ for (const ending of ["session.end", "/clear"] as const) {
   });
 }
 
-test("review fix 2: after session_replaced the old run neither acks nor retries, and new and queued sends are denied", async () => {
+test("after session_replaced the old run neither acks nor retries, and new and queued sends are denied", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), pi = await rig.harness("pi");
     const fake = claude.fake as FakeClaude;
@@ -81,7 +80,7 @@ test("review fix 2: after session_replaced the old run neither acks nor retries,
   });
 });
 
-test("review fix 2: a delivery accepted after /clear reconnected the session sends no ack with either token", async () => {
+test("a delivery accepted after /clear reconnected the session sends no ack with either token", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), pi = await rig.harness("pi");
     const fake = claude.fake as FakeClaude;
@@ -103,7 +102,7 @@ test("review fix 2: a delivery accepted after /clear reconnected the session sen
   });
 });
 
-test("review fix 2: a newer start keeps its token and its disconnect when an older close resumes from detach", async () => {
+test("a newer start keeps its token and its disconnect when an older close resumes from detach", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), pi = await rig.harness("pi");
     const fake = claude.fake as FakeClaude;
@@ -129,7 +128,7 @@ test("review fix 2: a newer start keeps its token and its disconnect when an old
   });
 });
 
-test("review fix 2: a session.receive whose next resolves after /clear sends no native-ack and records nothing for the new session", async () => {
+test("a session.receive whose next resolves after /clear sends no native-ack and records nothing for the new session", async () => {
   await withRig(async rig => {
     const pi = await rig.harness("pi");
     const claude = await rig.harness("claude", undefined, undefined, { claude: {} });
@@ -160,7 +159,7 @@ test("review fix 2: a session.receive whose next resolves after /clear sends no 
   });
 });
 
-test("review fix 2: session.end during a start, before registration, settles it with an error and no attachment spawns", async () => {
+test("session.end during a start, before registration, settles it with an error and no attachment spawns", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
     const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });

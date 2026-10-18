@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { resolveAddress, type Agent } from "@cross-harness-comms/protocol";
-import { eventually, uuid, uuidV7 } from "./helpers.ts";
-import { registration, withRig } from "./rig.ts";
+import { eventually, uuid, uuidV7 } from "./support/helpers.ts";
+import { registration, withRig } from "./support/rig.ts";
 
 test("invariant 1: resume after core restart retains identity, name, and queued mail", async () => {
   await withRig(async rig => {

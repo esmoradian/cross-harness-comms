@@ -1,18 +1,12 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { CommsMessageDetails } from "../adapters/pi/src/index.ts";
-import { FakePi } from "./fakes/pi.ts";
 import { bottom, commsMessage, detailsFor, expectColor, expectMutedFrame, expectWidths, identityTheme, markerTheme, plain,
-  rendererOf, renderLines, row, top } from "./pi-card-support.ts";
-import { withRig } from "./rig.ts";
+  rendererOf, renderLines, row, top, withPi } from "./support/pi-card.ts";
 
 // The ADR-017 card, rendered through the renderer the Pi adapter registers, as Pi calls it.
-
-async function withPi(run: (fake: FakePi) => void | Promise<void>) {
-  await withRig(async rig => { await run((await rig.harness("pi")).fake as FakePi); });
-}
 
 const body = "Can you review the parser change in src/parse.ts before I merge it?\n\nThanks, codex.";
 const message = detailsFor({ name: "codex-api", harness: "codex", cwd: "/Users/ed/src/api", id: "019a2b3c-4d5e-7f60-8a7b-1c2d3e4f5a6b", body });
@@ -113,22 +107,50 @@ const senders: Record<string, Omit<CommsMessageDetails, "body">> = {
   long: { from: "comms:a-very-long-agent-name-that-goes-on-and-on", name: "a-very-long-agent-name-that-goes-on-and-on", harness: "claude",
     cwd: `/Users/ed/プロジェクト/深い/${"nested/".repeat(10)}`, id: message.id, reply_to: reply.reply_to },
 };
-const widths = [...Array.from({ length: 38 }, (_, i) => i + 3), 47, 48, 49, 50, 64, 80, 99, 100, 101, 120, 160];
+const widths = [...Array.from({ length: 38 }, (_, i) => i + 3), 42, 46, 47, 48, 49, 50, 60, 64, 80, 99, 100, 101, 120, 160, 300];
+const preview = (text: string) => text.replace(/\s+/g, " ").trim();
+// A frame row for text of any width.
+const framed = (text: string, inner: number) => `│${text}${" ".repeat(inner - visibleWidth(text))}│`;
 
 for (const [bodyName, text] of Object.entries(bodies)) for (const [senderName, sender] of Object.entries(senders)) {
-  test(`pi card width invariant: ${bodyName}, ${senderName} sender, widths 3 to 160, both states and themes`, async () => {
+  test(`pi card width invariant: ${bodyName}, ${senderName} sender, widths 3 to 300, both states and themes`, async () => {
     await withPi(fake => {
       const sent = commsMessage({ ...sender, body: text });
-      for (const width of widths) for (const expanded of [false, true]) for (const theme of [identityTheme, markerTheme]) {
-        const lines = renderLines(fake, sent, width, { expanded, theme });
-        const context = `width ${width}, ${expanded ? "expanded" : "collapsed"}`;
-        if (!expanded) expect(lines, context).toHaveLength(4);
-        expect(lines.length, context).toBeGreaterThanOrEqual(3);
-        expectWidths(lines, width);
-        const visible = plain(lines);
-        expect(visible[0]!.startsWith("╭") && visible[0]!.endsWith("╮"), `${context}: ${visible[0]}`).toBe(true);
-        for (const middle of visible.slice(1, -1)) expect(middle.startsWith("│") && middle.endsWith("│"), `${context}: ${middle}`).toBe(true);
-        expect(visible.at(-1), context).toBe(`╰${"─".repeat(width - 2)}╯`);
+      for (const width of widths) for (const theme of [identityTheme, markerTheme]) {
+        const inner = width - 2;
+        const states = [false, true].map(expanded => {
+          const lines = renderLines(fake, sent, width, { expanded, theme });
+          const context = `width ${width}, ${expanded ? "expanded" : "collapsed"}`;
+          if (!expanded) expect(lines, context).toHaveLength(4);
+          expect(lines.length, context).toBeGreaterThanOrEqual(3);
+          expectWidths(lines, width);
+          const visible = plain(lines);
+          expect(visible[0]!.startsWith("╭") && visible[0]!.endsWith("╮"), `${context}: ${visible[0]}`).toBe(true);
+          for (const middle of visible.slice(1, -1)) expect(middle.startsWith("│") && middle.endsWith("│"), `${context}: ${middle}`).toBe(true);
+          expect(visible.at(-1), context).toBe(`╰${"─".repeat(inner)}╯`);
+          // Body lines start one space in; at width 3 the inner width is that one column.
+          if (!expanded || width >= 4) expect(Array.from(visible[1]!)[1], `${context}: ${visible[1]}`).toBe(" ");
+          return visible;
+        });
+        const [collapsed, expanded] = states as [string[], string[]];
+        const context = `width ${width}`;
+        // The header is the same in both states, and the collapsed footer's hint is the card's only Ctrl+O.
+        expect(collapsed[0], context).toBe(expanded[0]);
+        expect(collapsed[0], context).not.toContain("Ctrl+O");
+        expect(collapsed.join("\n").match(/Ctrl\+O/g)?.length ?? 0, context).toBeLessThanOrEqual(1);
+        expect(expanded.join("\n"), context).not.toContain("Ctrl+O");
+        if (senderName === "short" && width >= 100) expect(collapsed[2]!.slice(1, -1).trimEnd(), context).toEndWith(" · Ctrl+O to expand");
+        // The card draws with pi-tui, so pi-tui's own truncation and wrapping are the oracle for body text,
+        // once the wrap width, the inner width minus the pad, fits a two-column character.
+        if (width < 5) continue;
+        expect(collapsed[1], context).toBe(framed(stripTerminalSequences(truncateToWidth(` ${preview(text)}`, inner, "")), inner));
+        const wrapped = wrapTextWithAnsi(text, inner - 1);
+        expect(expanded.slice(1, 1 + wrapped.length), context).toEqual(wrapped.map(line => framed(stripTerminalSequences(` ${line}`), inner)));
+        expect(expanded[1 + wrapped.length], context).toBe(framed("", inner));
+        if (senderName === "short" && width >= 42) {
+          expect(collapsed[2], context).toStartWith("│ To reply: ");
+          expect(expanded[2 + wrapped.length], context).toBe(framed(" To reply: comms_send to comms:codex-api", inner));
+        }
       }
     });
   });

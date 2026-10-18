@@ -1,5 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import type { PiAPI, PiContext, PiMessageRenderer, PiMessageRenderOptions, PiTheme, PiTool, PiToolResult } from "../../adapters/pi/src/index.ts";
+import type { PiAPI, PiContext, PiMessageRenderer, PiMessageRenderOptions, PiTheme, PiTool, PiToolResult } from "../../../adapters/pi/src/index.ts";
 
 export class FakePi implements PiAPI {
   readonly calls: { method: string; args: unknown[] }[] = [];
