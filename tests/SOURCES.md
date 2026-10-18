@@ -37,11 +37,7 @@ Sources: the installed Pi 0.85.1 declarations in `dist/core/extensions/types.d.t
 
 ## Claude Code
 
-Source: [generate mod types for the installed build](https://code.claude.com/docs/en/plugins/mods/create#get-the-types-for-your-build), using the generated declarations for installed Claude Code 2.1.289:
-
-- `internal/probes/claude-mod/.claude-plugin/types/claude-code/index.d.ts`
-- `internal/probes/claude-mod/.claude-plugin/types/claude-code-tools/index.d.ts`
-- `internal/probes/claude-mod/hooks/register.js`
+Source: [generate mod types for the installed build](https://code.claude.com/docs/en/plugins/mods/create#get-the-types-for-your-build), using the generated `claude-code` and `claude-code-tools` declarations for installed Claude Code 2.1.289 in a probe mod, with its `hooks/register.js`; the probe mod has since been retired.
 
 The structural subset in `adapters/claude/src/api.ts` is handwritten, not an edited generated file.
 The older temporary declaration snapshot lacks `process.spawn` and is not the binding source.
@@ -80,13 +76,13 @@ Native path tests check the exact event and result objects passed through middle
 
 ### Native inbox (ADR-016)
 
-Sources: the observations of interactive Claude Code 2.1.289 sessions on 2026-10-17 quoted in `internal/HANDOFF-CLAUDE-INBOX.md`, the probes `internal/probes/claude-inbox/inbox-listen.ts`, `internal/probes/claude-inbox/inbox-post.ts`, `internal/probes/claude-inbox-mod/hooks/register.js`, and `internal/probes/claude-inbox-mod/post.ts`, and the generated declarations in `internal/probes/claude-mod/.claude-plugin/types/claude-code/index.d.ts` (`env`, `session.version`, `SessionVersion`, `session.receive`, `SessionReceiveInput`, `SessionReceiveOrigin`, `SessionReceiveResult`).
+Sources: the observations of interactive Claude Code 2.1.289 sessions on 2026-10-17 quoted in `internal/HANDOFF-CLAUDE-INBOX.md`, the since-retired probes that listened on and posted to a session's inbox socket and the probe mod that hooked `session.receive`, and the generated 2.1.289 `claude-code` declarations (`env`, `session.version`, `SessionVersion`, `session.receive`, `SessionReceiveInput`, `SessionReceiveOrigin`, `SessionReceiveResult`).
 
 - `$.env.get(name)` resolves the variable's value or `undefined`; the fake sets only `CLAUDE_CODE_MESSAGING_SOCKET`, and only for a native session.
 - `$.session.version()` resolves `{ version, base, builtAt }`; the default is the observed `{ version: "2.1.289", base: "2.1.289", builtAt: "2026-10-03T19:21:39Z" }`.
 - `on("session.receive", handler)` hooks receive `{ origin, text }` and call `next(e)`, which resolves `{ text }` once the delivery is queued; a hook may answer `{ consumed }` instead.
   The fake's innermost `next` records the text in `queued`, and every chain's answer in `receipts`.
-- The inbox is a real Unix socket named like a PID (`2xxxx.sock`) in a short `/tmp/cc-*` directory standing in for `/tmp/cc-socks`, as `inbox-listen.ts` listens.
+- The inbox is a real Unix socket named like a PID (`2xxxx.sock`) in a short `/tmp/cc-*` directory standing in for `/tmp/cc-socks`, as the inbox probe listened.
 - It reads newline-terminated JSON lines, records each line and each connection's bytes and end, and never writes back on the connection.
 - Each line reaches `session.receive` with `origin` `{ kind: "peer", plugin: from_plugin }`, or `{ kind: "peer" }` without `from_plugin`, and `text` equal to `message.content` verbatim, as observed for lines posted with `"from_plugin": "cross-harness-comms"`; `msg_id` is not exposed.
 - `hold` makes the inbox swallow lines without running the hooks, standing in for a session that never acknowledges; `release()` runs them later, standing in for a late delivery.
@@ -115,9 +111,8 @@ These are specified in `attach-parent.test.ts`.
 
 ## Codex
 
-Sources: `internal/probes/codex-mcp/server.mjs`, the session-binding observations in `internal/ARCHITECTURE.md`, and the installed Codex CLI 0.162.1 `codex queue --help` output.
-The retained probe server records JSON-RPC `tools/call` requests and their `_meta` values.
-The observed SessionStart input is preserved in the local research log `/private/tmp/cross-harness-deep.6XoooY/codex-identity3.log`.
+Sources: a since-retired probe MCP server that recorded Codex 0.162.1's JSON-RPC `tools/call` requests and their `_meta` values, the session-binding observations in `internal/ARCHITECTURE.md`, and the installed Codex CLI 0.162.1 `codex queue --help` output.
+The observed SessionStart input was captured in a temporary research log, since removed; the fields below record it.
 
 - MCP calls carry `{ jsonrpc, id, method: "tools/call", params: { name, arguments, _meta } }`.
 - `_meta["x-codex-turn-metadata"].thread_id` identifies the caller; `session_id` is a separate field.
