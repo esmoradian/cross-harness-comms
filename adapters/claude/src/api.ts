@@ -26,6 +26,7 @@ export interface SessionReceiveInput { origin: SessionReceiveOrigin; text: strin
 export type SessionReceiveResult = { text: string; consumed?: undefined } | { consumed: string; text?: undefined };
 export interface ClaudeAPI {
   plugin: { name: string; root: string };
+  agent: { list(): Promise<{ id: string }[]> };
   env?: { get(name: string): Promise<string | undefined> };
   ui?: { log(text: string): void };
   clock?: { now(): Promise<number>; after(delay: number, callback: () => void | Promise<void>): { cancel(): void } };

@@ -47,6 +47,9 @@ The structural subset in `adapters/claude/src/api.ts` is handwritten, not an edi
 The older temporary declaration snapshot lacks `process.spawn` and is not the binding source.
 
 - `tool.call` events have flat fields such as `{ tool, tool_use_id, to, message }`, not a nested `arguments` object.
+- `agentId` identifies a child loop, including internal forks; `$.agent.list()` lists normal subagents/teammates, while engine-owned forks have IDs absent from that list (generated `AgentLoop` and `AgentInfo` declarations).
+  A real Claude Code 2.1.296 `$.model.fork` probe on 2026-10-18 confirmed that an unlisted fork reached `tool.call`, the unguarded comms adapter sent under the main identity, and passing that same call downstream instead produced `A model fork cannot use tools` with no stored message.
+  The native before/after evidence is in `/private/tmp/comms-routing-0RBCEU/` and `/private/tmp/comms-routing-G4WMpZ/`; `claude-agent-scope.test.ts` keeps this boundary and listed-subagent messaging covered.
 - `SendMessage` has `to`, `message`, optional `summary`, and optional `notify_when_idle`; its result type is `unknown`.
 - `ListAgents` returns `{ listing: string }`, not structured agent records.
 - `$.session.id()` and `$.session.cwd()` return promises.

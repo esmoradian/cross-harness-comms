@@ -59,6 +59,7 @@ export class FakeClaudeInbox {
 }
 
 export class FakeClaude {
+  readonly agents: { id: string }[] = [];
   readonly calls: { method: string; args: unknown[] }[] = [];
   readonly incoming: PromptInput[] = [];
   readonly runs: { argv: readonly string[]; init?: ProcessRunInit }[] = [];
@@ -133,6 +134,7 @@ export class FakeClaude {
       },
       // Installed-build types: $.plugin.root is the plugin's absolute directory.
       plugin: { name: "cross-harness-comms", root: FakeClaude.pluginRoot },
+      agent: { list: async () => { this.calls.push({ method: "agent.list", args: [] }); return this.agents.map(agent => ({ ...agent })); } },
       session: {
         id: async () => { this.calls.push({ method: "session.id", args: [] }); return this.sessionId; },
         cwd: async () => { this.calls.push({ method: "session.cwd", args: [] }); return cwd; },
