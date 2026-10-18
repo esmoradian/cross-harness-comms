@@ -88,6 +88,9 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       runtime_state TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, ended_at INTEGER, daemon_owned INTEGER NOT NULL DEFAULT 0);
     INSERT OR IGNORE INTO codex_lifecycle (agent, executable, runtime_state)
       SELECT agent, executable, 'unknown' FROM codex_threads;`);
+  // Earlier event-driven builds persisted lifecycle rows before end timestamps existed.
+  const lifecycleColumns = db.query("PRAGMA table_info(codex_lifecycle)").all() as { name: string }[];
+  if (!lifecycleColumns.some(column => column.name === "ended_at")) db.exec("ALTER TABLE codex_lifecycle ADD COLUMN ended_at INTEGER");
   // Daemon presence must be reconciled before dispatching mail after a restart.
   // Hook-only sessions keep their existing restart behavior.
   if (options.codexEvents) db.exec("DELETE FROM codex_threads WHERE agent IN (SELECT agent FROM codex_lifecycle WHERE daemon_owned = 1)");
