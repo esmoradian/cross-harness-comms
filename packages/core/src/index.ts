@@ -23,6 +23,7 @@ interface Connection {
   agent?: string;
   token?: string;
   requests: Promise<void>;
+  closeAfterResponse?: boolean;
   pings: Map<string, (responsive: boolean) => void>;
   // A Claude session's inbox socket, whether the native route is on, and its unacknowledged line (ADR-016).
   inbox?: string;
@@ -430,7 +431,11 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       case "detach": {
         const agent = authenticated(params);
         const owner = live.get(agent);
-        if (owner) { detach(owner); queueMicrotask(() => owner.stream.end()); }
+        if (owner) {
+          detach(owner);
+          if (owner === connection) connection.closeAfterResponse = true;
+          else owner.stream.end();
+        }
         return { ok: true };
       }
       case "rename": {
@@ -546,7 +551,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
           return;
         }
         connection.requests = connection.requests.then(async () => {
-          if (closed || stream.destroyed) return;
+          if (closed || stream.destroyed || stream.writableEnded) return;
           let id: string | number | null = null;
           try {
             if (!wire || typeof wire !== "object" || wire.jsonrpc !== "2.0" || !("method" in wire) || typeof wire.method !== "string")
@@ -557,6 +562,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
             if (!("method" in request)) throw failure("INVALID_REQUEST");
             const result = await handle(connection, request.method, request.params);
             if (id !== null) packet(connection, { jsonrpc: "2.0", id, result });
+            // end() flushes the response already written before closing a self-detaching socket.
+            if (connection.closeAfterResponse) stream.end();
             if (request.method === "hello" && connection.agent) for (const message of pending(connection.agent)) deliver(message);
           } catch (error) {
             const rpc = error as Partial<RpcError>;
