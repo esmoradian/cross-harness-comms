@@ -45,6 +45,7 @@ Usage: comms <command>
   native-ack             Acknowledge a native Claude inbox line, JSON on stdin: token, from
   detach                 Close a session using its token on stdin
   list                   List agents and presence as JSON; optional JSON stdin: token
+  resolve                Find the agent named exactly, JSON on stdin: name, optional token, skip_claude
   rename <address> <name> Rename an agent
   inspect <message-id>   Inspect delivery state
   status                 Show core and protocol versions
@@ -96,9 +97,13 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
       const params = await readInput(io) as unknown as HelloParams;
       const stream = await runtime.connect(runtime.platform.socketAddress());
       stream.setEncoding("utf8");
+      let stopWatching = () => {};
       try {
         await new Promise<void>((resolve, reject) => {
           const abort = () => { stream.destroy(); resolve(); };
+          // Once the process that started attach is gone, nobody reads its output, so closing the
+          // connection ends the session's presence as for any closed connection.
+          stopWatching = runtime.platform.watchParent(abort);
           const finish = () => { io.signal.removeEventListener("abort", abort); resolve(); };
           readPackets(stream, packet => {
             if ("method" in packet && packet.method === "ping" && packet.id !== undefined) {
@@ -113,11 +118,10 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
           if (io.signal.aborted) { abort(); return; }
           writePacket(stream, { jsonrpc: "2.0", id: 1, method: "hello", params });
         });
-      } finally { stream.destroy(); }
+      } finally { stopWatching(); stream.destroy(); }
       return 0;
     }
-    if (command === "resolve") throw new Error("not implemented");
-    if (!["send", "ack", "native-ack", "detach", "list", "rename", "inspect", "status"].includes(command)) throw new Error("Unknown command; run comms help");
+    if (!["send", "ack", "native-ack", "detach", "list", "resolve", "rename", "inspect", "status"].includes(command)) throw new Error("Unknown command; run comms help");
     const client = createClient(await runtime.connect(runtime.platform.socketAddress()));
     try {
       const hello = await client.hello({ versions: VERSION_RANGE });
@@ -133,6 +137,7 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
         case "ack": result = await client.request("ack", await readInput(io) as unknown as { token: string; id: string }); break;
         case "native-ack": result = await client.request("native_ack", await readInput(io) as unknown as { token: string; from: string }); break;
         case "detach": result = await client.request("detach", await readInput(io) as unknown as { token: string }); break;
+        case "resolve": result = await client.request("resolve", await readInput(io) as unknown as { token?: string; name: string; skip_claude?: boolean }); break;
         case "rename":
           if (!argv[1] || !argv[2]) throw new Error("Usage: comms rename <address> <name>");
           result = await client.request("rename", { address: argv[1], name: argv[2] }); break;

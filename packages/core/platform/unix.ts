@@ -34,7 +34,18 @@ export function createUnixPlatform(): Platform {
     },
     async restrictAccess() { await chmod(address, 0o600); },
     codexHome: () => process.env.CODEX_HOME || join(homedir(), ".codex"),
-    watchParent() { throw new Error("not implemented"); },
+    watchParent(onGone) {
+      // A parent that exits leaves this process reparented, to PID 1 or a subreaper, so a changed
+      // parent PID means it is gone. The timer is unreferenced so it never keeps the process alive.
+      const parent = process.ppid;
+      const timer = setInterval(() => {
+        if (process.ppid === parent) return;
+        clearInterval(timer);
+        onGone();
+      }, 1000);
+      timer.unref();
+      return () => clearInterval(timer);
+    },
     async processExecutable(pid) {
       // Linux exposes /proc; macOS and other Unix systems answer through ps.
       const fromProc = await readlink(`/proc/${pid}/exe`).catch(() => undefined);

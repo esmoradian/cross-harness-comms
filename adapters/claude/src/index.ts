@@ -30,8 +30,9 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
   const received = new Set<string>();
   // Messages the native inbox route already delivered, so their fallback copies are only acknowledged.
   const seenNatively = new Set<string>();
-  // The address of each comms row the last ListAgents showed, by name, so the model can send to the name.
-  const listed = new Map<string, string>();
+  // Whether Claude's own peer messaging is on, which this session shows by reporting an inbox socket
+  // at start; bare names of Claude agents are then left to it.
+  let nativePeers = false;
   const sends = new Map<string, Promise<unknown>>();
   let disconnect: (() => Promise<void>) | undefined;
   const close = async () => {
@@ -55,12 +56,13 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     const run = generation;
     sessionId = await $.session.id();
     if (sessionId === previousSession) token = previousToken;
-    else { pendingReplies.clear(); received.clear(); seenNatively.clear(); listed.clear(); sends.clear(); }
+    else { pendingReplies.clear(); received.clear(); seenNatively.clear(); sends.clear(); }
     const session = { harness: "claude", session_key: sessionId, cwd: await $.session.cwd(), host: options.host };
     // Mods get no CLAUDE_PLUGIN_ROOT; $.plugin.root is the plugin's directory.
     if (options.binary === "comms") options.binary = `${$.plugin.root}/bin/comms`;
     // Claude's inbox socket, which the core writes native peer lines to (ADR-016).
     const inbox = await $.env!.get("CLAUDE_CODE_MESSAGING_SOCKET");
+    nativePeers = !!inbox;
     const claude = inbox ? { inbox, version: (await $.session.version!()).version } : undefined;
     const ensure = await $.process.run([options.binary, "ensure"]);
     if (ensure.exitCode) throw new Error(ensure.stderr || "comms ensure failed");
@@ -160,10 +162,22 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
       return result;
     };
     if (event.tool === "SendMessage") {
-      const named = typeof event.to === "string" ? listed.get(event.to) : undefined;
-      if (named && !named.startsWith("comms:")) return next({ ...event, to: named });
-      const address = named ?? event.to;
-      if (typeof address !== "string" || !address.startsWith("comms:")) return next(event);
+      if (typeof event.to !== "string") return next(event);
+      let address = event.to;
+      if (!address.startsWith("comms:") && !address.startsWith("uds:")) {
+        // A bare name is looked up in the core on every call, so names the user typed or a message
+        // carried work before any ListAgents and follow renames. Anything the core cannot answer
+        // stays Claude's: native subagents, teammates, and peers are never broken by comms.
+        let agent: Agent | null = null;
+        try {
+          const found = await command("resolve", { ...(token ? { token } : {}), name: address, ...(nativePeers ? { skip_claude: true } : {}) }) as { agent?: Agent | null };
+          agent = found.agent ?? null;
+        } catch { /* A failed lookup passes the call through. */ }
+        if (!agent) return next(event);
+        if (agent.claude_address) return next({ ...event, to: agent.claude_address });
+        address = `comms:${agent.name}`;
+      }
+      if (!address.startsWith("comms:")) return next(event);
       if (!token || await $.session.id() !== sessionId) return { deny: "comms session is not connected" };
       const run = generation;
       // Serialize logical sends to one address, so concurrent replies consume
@@ -207,14 +221,13 @@ export function registerClaude(on: ClaudeOn, options: { binary: string; host: st
     // Native peer messaging lists Claude peers by short refs rather than session IDs,
     // so when it is on, Claude peers stay native and only other harnesses are added.
     const header = /^Peer sessions \((\d+)\):/m;
-    const nativePeers = header.test(original.listing);
-    const shown = result.agents.filter(a => a.harness !== "claude" || (!nativePeers && a.session_key !== sessionId));
-    for (const a of shown) listed.set(a.name, a.claude_address ?? `comms:${a.name}`);
+    const peerSection = header.test(original.listing);
+    const shown = result.agents.filter(a => a.harness !== "claude" || (!peerSection && a.session_key !== sessionId));
     const time = await $.clock!.now();
     const extra = shown
       // Under the native header, rows match native peers; on the native route, Claude
       // sends to a reply socket with its own SendMessage.
-      .map(a => nativePeers
+      .map(a => peerSection
         ? `  ${a.name}  ·  ${a.harness}  ·  ${a.online ? "online" : "offline"}  ·  ${activeAgo(a, time)}  ·  ${a.cwd}  ·  send to ${a.claude_address ?? `comms:${a.name}`}`
         : `comms:${a.name} (${a.harness}, ${a.online ? "online" : "offline"}, ${activeAgo(a, time)}, ${a.cwd})`);
     if (!extra.length) return native;

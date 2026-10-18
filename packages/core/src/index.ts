@@ -101,13 +101,22 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   // Each agent's last activity in epoch milliseconds, kept in memory only; it never moves backward (ADR-018).
   const activity = new Map<string, number>();
   const touch = (agent: string, time = now()) => activity.set(agent, Math.max(activity.get(agent) ?? time, time));
+  const agentFields = "id, harness, session_key, host, name, cwd, last_seen";
+  // An agent row with its presence and activity, as every listing shows it.
+  const present = (agent: Omit<Agent, "online">, codex: Set<string>): Agent => {
+    const active = activity.get(agent.id);
+    return { ...agent, online: live.has(agent.id) || codex.has(agent.id), active_at: active === undefined ? agent.last_seen : new Date(active).toISOString() };
+  };
   const agents = (): Agent[] => {
     const codex = codexOnline();
-    return (db.query("SELECT id, harness, session_key, host, name, cwd, last_seen FROM agents ORDER BY rowid").all() as Omit<Agent, "online">[])
-      .map(agent => {
-        const active = activity.get(agent.id);
-        return { ...agent, online: live.has(agent.id) || codex.has(agent.id), active_at: active === undefined ? agent.last_seen : new Date(active).toISOString() };
-      });
+    return (db.query(`SELECT ${agentFields} FROM agents ORDER BY rowid`).all() as Omit<Agent, "online">[]).map(agent => present(agent, codex));
+  };
+  // The agent with exactly this name, read through the name's unique index.
+  const agentNamed = (name: string): Agent | undefined => {
+    const agent = db.query(`SELECT ${agentFields} FROM agents WHERE name = ?`).get(name) as Omit<Agent, "online"> | null;
+    if (!agent) return undefined;
+    const codex = db.query("SELECT 1 FROM codex_threads WHERE agent = ?").get(agent.id) ? new Set([agent.id]) : new Set<string>();
+    return present(agent, codex);
   };
   const packet = (connection: Connection, value: WirePacket) => writePacket(connection.stream,
     convert(value, policy.latest, connection.version ?? policy.latest, policy));
@@ -125,6 +134,14 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       ? db.query("SELECT id FROM agents WHERE token_hash = ?").get(hash(params.token)) as { id: string } | null : null;
     if (!agent) throw failure("INVALID_TOKEN");
     return agent.id;
+  };
+  // How an agent appears to the caller holding `token`: a Claude caller on the native route sees
+  // each other harness's reply socket as its `claude_address` (ADR-016).
+  const addressing = (token: unknown): (agent: Agent) => Agent => {
+    const caller = typeof token === "string" ? db.query("SELECT id FROM agents WHERE token_hash = ?").get(hash(token)) as { id: string } | null : null;
+    const connection = caller ? live.get(caller.id) : undefined;
+    const directory = connection?.native && connection.inbox ? dirname(connection.inbox) : undefined;
+    return agent => directory && agent.harness !== "claude" ? { ...agent, claude_address: `uds:${replyPath(directory, agent.id)}` } : agent;
   };
   // The Codex MCP server acts for whichever online thread its call names (ADR-014).
   const codexSender = (thread: string) => {
@@ -347,13 +364,15 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       }
       case "codex_session_end": codexEnd(string(params.session_key)); return { ok: true };
       case "list": {
-        // A Claude caller on the native route sees each other harness's reply socket as its address.
-        const caller = typeof params.token === "string" ? db.query("SELECT id FROM agents WHERE token_hash = ?").get(hash(params.token)) as { id: string } | null : null;
-        const connection = caller ? live.get(caller.id) : undefined;
-        const directory = connection?.native && connection.inbox ? dirname(connection.inbox) : undefined;
-        return { agents: agents().map(a => directory && a.harness !== "claude" ? { ...a, claude_address: `uds:${replyPath(directory, a.id)}` } : a) };
+        const address = addressing(params.token);
+        return { agents: agents().map(address) };
       }
-      case "resolve": throw new Error("not implemented");
+      case "resolve": {
+        // Exact names only, never addresses or IDs; `skip_claude` leaves Claude agents to Claude's own messaging.
+        const agent = agentNamed(string(params.name));
+        if (!agent || (params.skip_claude === true && agent.harness === "claude")) return { agent: null };
+        return { agent: addressing(params.token)(agent) };
+      }
       case "send": {
         const sender = params.codex_thread === undefined ? authenticated(params) : codexSender(string(params.codex_thread));
         const id = string(params.id);

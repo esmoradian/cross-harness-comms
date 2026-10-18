@@ -36,8 +36,9 @@ export class CommsCard implements Component {
     const theme = this.theme;
     if (width < 3) return [truncateToWidth(`From ${name}`, width)];
     const inner = width - 2;
-    const header = ` From: ${name} (${harness} · ${cwd}) `;
-    const title = truncateToWidth(this.collapsed ? `${header} Ctrl+O expands ` : header, inner, "");
+    // Departures from Pi Intercom: the header has no ` Ctrl+O expands `, since the collapsed footer
+    // already says it, and body lines start one space in, like the header and the dim lines.
+    const title = truncateToWidth(` From: ${name} (${harness} · ${cwd}) `, inner, "");
     const frame = (content: string) => {
       const text = truncateToWidth(content, inner, "");
       return theme.fg("muted", "│") + text + theme.fg("muted", `${" ".repeat(Math.max(0, inner - visibleWidth(text)))}│`);
@@ -46,10 +47,10 @@ export class CommsCard implements Component {
     const hint = `To reply: comms_send to comms:${name}`;
     const replyTo = reply_to ? `Reply to ${reply_to.slice(0, 8)}` : undefined;
     if (this.collapsed) {
-      lines.push(frame(theme.fg("text", body.replace(/\s+/g, " ").trim())));
+      lines.push(frame(theme.fg("text", ` ${body.replace(/\s+/g, " ").trim()}`)));
       lines.push(frame(theme.fg("dim", ` ${[hint, ...(replyTo ? [replyTo] : []), "Ctrl+O to expand"].join(" · ")}`)));
     } else {
-      for (const line of wrapTextWithAnsi(body, inner)) lines.push(frame(theme.fg("text", line)));
+      for (const line of wrapTextWithAnsi(body, Math.max(1, inner - 1))) lines.push(frame(theme.fg("text", ` ${line}`)));
       lines.push(frame(""));
       for (const line of wrapTextWithAnsi(theme.fg("dim", ` ${hint}`), inner)) lines.push(frame(line));
       if (replyTo) lines.push(frame(""), frame(theme.fg("dim", ` ${replyTo}`)));
