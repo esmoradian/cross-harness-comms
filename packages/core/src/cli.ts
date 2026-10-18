@@ -5,14 +5,10 @@ import { createClient, readPackets, writePacket } from "@cross-harness-comms/cli
 import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type SendParams } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
 import { ensure, serve, CORE_VERSION } from "./lifecycle.ts";
-import { runMcp, codexHook } from "./mcp.ts";
+import { runMcp, codexHook, type CodexHost, type McpIO } from "@cross-harness-comms/codex/mcp";
 
-export interface CliIO {
-  stdin: AsyncIterable<string>;
-  stdout(text: string): void;
-  stderr(text: string): void;
-  signal: AbortSignal;
-}
+// `comms mcp` runs on the CLI's own stdio, so the two share one shape.
+export type CliIO = McpIO;
 export interface CliRuntime {
   platform: Platform;
   connect(address: string): Promise<Duplex>;
@@ -71,6 +67,11 @@ async function allowCodexReplies(io: CliIO, platform: Platform): Promise<void> {
   io.stdout(`Allowed comms replies without review in ${path}.\n`);
 }
 
+// What the Codex MCP server and hooks need from the core, passed in so the adapter does not import the core.
+function codexHost(runtime: CliRuntime): CodexHost {
+  return { connect: runtime.connect, ensure: () => ensure(runtime), processExecutable: pid => runtime.platform.processExecutable(pid) };
+}
+
 export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRuntime): Promise<number> {
   const command = argv[0] ?? "help";
   try {
@@ -78,8 +79,8 @@ export async function runCli(argv: readonly string[], io: CliIO, runtime: CliRun
     if (["version", "--version"].includes(command)) { io.stdout(CORE_VERSION + "\n"); return 0; }
     if (command === "ensure") { io.stdout(await ensure(runtime) + "\n"); return 0; }
     if (command === "serve") return await serve(io, runtime);
-    if (command === "mcp") return await runMcp(io, runtime);
-    if (command === "session-start" || command === "session-end") return await codexHook(io, runtime);
+    if (command === "mcp") return await runMcp(io, codexHost(runtime));
+    if (command === "session-start" || command === "session-end") return await codexHook(await readInput(io), codexHost(runtime));
     if (command === "install") {
       const instructions: Record<string, string> = {
         pi: "Build first, then install with pi install /absolute/path/to/dist/plugins/pi.",

@@ -4,8 +4,8 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { createClient } from "@cross-harness-comms/client";
 import { RELEASE_VERSION, VERSION_RANGE } from "@cross-harness-comms/protocol";
-import { createCore } from "./src/index.ts";
-import { watchCodexDaemon } from "./codex-daemon.ts";
+import { createCore } from "./core.ts";
+import { watchCodexDaemon } from "./codex/daemon.ts";
 import type { CliIO, CliRuntime } from "./cli.ts";
 
 export const CORE_VERSION = RELEASE_VERSION;

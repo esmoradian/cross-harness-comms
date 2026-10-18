@@ -181,7 +181,6 @@ The fake emits those events and changes its host session ID; registration, disco
 `tests/detach.test.ts` uses the real client and core over the rig's in-memory streams.
 Self-detach must return `{ ok: true }` before ending the registered connection.
 Detaching another connection must end the owner while leaving the caller usable, including repeated detach of an offline session.
-The compiled-core probe in `internal/probes/validate-core.ts` covers self-detach over a real Unix socket, followed by offline queueing and recovery.
 
 ## Narrow choices for the first specification
 

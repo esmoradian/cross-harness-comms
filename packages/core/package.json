@@ -3,9 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./cli": "./cli.ts" },
+  "exports": { ".": "./src/core.ts", "./cli": "./src/cli.ts" },
   "dependencies": {
     "@cross-harness-comms/protocol": "workspace:*",
-    "@cross-harness-comms/client": "workspace:*"
+    "@cross-harness-comms/client": "workspace:*",
+    "@cross-harness-comms/codex": "workspace:*"
   }
 }

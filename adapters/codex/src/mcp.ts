@@ -1,30 +1,39 @@
 import { hostname } from "node:os";
-import { createClient } from "@cross-harness-comms/client";
+import { createClient, type AdapterRuntime } from "@cross-harness-comms/client";
 import { RELEASE_VERSION, VERSION_RANGE, SEND_SCHEMA, MAX_LINE_BYTES } from "@cross-harness-comms/protocol";
-import { createCodexAdapter, type McpCall, type SessionEndInput, type SessionStartInput } from "../../adapters/codex/src/index.ts";
-import { readInput, type CliIO, type CliRuntime } from "./cli.ts";
-import { ensure } from "./lifecycle.ts";
+import { createCodexAdapter, type McpCall, type SessionEndInput, type SessionStartInput } from "./index.ts";
+
+export interface McpIO {
+  stdin: AsyncIterable<string>;
+  stdout(text: string): void;
+  stderr(text: string): void;
+  signal: AbortSignal;
+}
+// The comms CLI supplies the core's lifecycle and platform, so this adapter never imports the core.
+export interface CodexHost extends Pick<AdapterRuntime, "ensure" | "connect"> {
+  processExecutable(pid: number): Promise<string | undefined>;
+}
 
 // Codex hooks: SessionStart marks the thread online, SessionEnd marks it offline (ADR-014).
-export async function codexHook(io: CliIO, runtime: CliRuntime): Promise<number> {
-  const input = await readInput(io) as unknown as SessionStartInput | SessionEndInput;
+export async function codexHook(hookInput: Record<string, unknown>, host: CodexHost): Promise<number> {
+  const input = hookInput as unknown as SessionStartInput | SessionEndInput;
   if (!["SessionStart", "SessionEnd"].includes(input.hook_event_name) || !input.session_id || !input.cwd) throw new Error("Invalid Codex hook input");
-  const client = createClient(await runtime.connect(await ensure(runtime)));
+  const client = createClient(await host.connect(await host.ensure()));
   try {
     await client.hello({ versions: VERSION_RANGE });
     if (input.hook_event_name === "SessionEnd") await client.request("codex_session_end", { session_key: input.session_id });
     else await client.request("codex_session_start", {
       session: { harness: "codex", session_key: input.session_id, host: hostname(), cwd: input.cwd },
       // The hook's parent is the Codex that owns this thread, so `codex queue` reaches the same install.
-      executable: await runtime.platform.processExecutable(process.ppid) ?? "codex",
+      executable: await host.processExecutable(process.ppid) ?? "codex",
     });
     return 0;
   } finally { await client.close(); }
 }
 
-export async function runMcp(io: CliIO, runtime: CliRuntime): Promise<number> {
-  const adapter = createCodexAdapter({ host: hostname(), connect: runtime.connect,
-    ensure: () => ensure(runtime), notice: text => io.stderr(text + "\n") });
+export async function runMcp(io: McpIO, host: CodexHost): Promise<number> {
+  const adapter = createCodexAdapter({ host: hostname(), connect: host.connect,
+    ensure: host.ensure, notice: text => io.stderr(text + "\n") });
   let stopped = false;
   const close = async () => { stopped = true; await adapter.close(); };
   const abort = () => { void close(); };

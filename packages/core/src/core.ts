@@ -5,8 +5,8 @@ import { Database } from "bun:sqlite";
 import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { basename, dirname } from "node:path";
 import { hostname } from "node:os";
-import type { CodexEvent, CodexRuntimeState, CodexThread } from "../codex-events.ts";
-export type { CodexEvent, CodexSnapshot } from "../codex-events.ts";
+import type { CodexEvent, CodexRuntimeState, CodexThread } from "./codex/events.ts";
+export type { CodexEvent, CodexSnapshot } from "./codex/events.ts";
 import { readPackets, writePacket, messageId } from "@cross-harness-comms/client";
 import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, formatMessage, negotiate, resolveAddress, MAX_LINE_BYTES,
   CLAUDE_INBOX_VERSIONS, CLAUDE_NATIVE_MIN_VERSION, formatClaudeInboxLine, parseClaudeInboxLine,

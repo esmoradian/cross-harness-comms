@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { RELEASE_VERSION } from "@cross-harness-comms/protocol";
-import type { CodexEvent, CodexRuntimeState, CodexSnapshot, CodexThread } from "./codex-events.ts";
-import type { Platform } from "./platform/platform.ts";
+import type { CodexEvent, CodexRuntimeState, CodexSnapshot, CodexThread } from "./events.ts";
+import type { Platform } from "../platform/platform.ts";
 
 interface Notification { method: string; params?: unknown; emittedAtMs?: number }
 

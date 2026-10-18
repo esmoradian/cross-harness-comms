@@ -48,6 +48,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@cross-harness-comms/client": "workspace:*",
+        "@cross-harness-comms/codex": "workspace:*",
         "@cross-harness-comms/protocol": "workspace:*",
       },
     },

@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { watchCodexDaemon as watch } from "../packages/core/codex-daemon.ts";
-import type { CodexEvent } from "../packages/core/codex-events.ts";
-import type { Platform } from "../packages/core/platform/platform.ts";
+import { watchCodexDaemon as watch } from "../packages/core/src/codex/daemon.ts";
+import type { CodexEvent } from "../packages/core/src/codex/events.ts";
+import type { Platform } from "../packages/core/src/platform/platform.ts";
 import { eventually } from "./helpers.ts";
 
 function fixture(duringRead?: (send: (event: unknown) => void) => void) {

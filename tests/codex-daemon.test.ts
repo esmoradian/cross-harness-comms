@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { codexDaemon } from "../packages/core/codex-daemon.ts";
-import type { Platform } from "../packages/core/platform/platform.ts";
+import { codexDaemon } from "../packages/core/src/codex/daemon.ts";
+import type { Platform } from "../packages/core/src/platform/platform.ts";
 
 // A stand-in for Codex's app-server daemon: JSON-RPC over a WebSocket on a Unix socket.
 function fakeHome() {
