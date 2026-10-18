@@ -37,7 +37,13 @@ export interface ClaudeAPI {
   };
 }
 export interface StartEvent { cwd: string; surface: null; isInteractive: boolean }
+export interface EndEvent { reason: "clear" | "resume" | "logout" | "prompt_input_exit" | "other"; sessionId: string; resume: { id: string } }
+export interface ClassicStartEvent { hook_event_name: "SessionStart"; session_id: string; cwd: string; source: "startup" | "resume" | "clear" | "compact" | "fork" }
 export interface ClaudeOn {
+  (name: "session.end", handler: ($: ClaudeAPI, event: EndEvent,
+    next: (event: EndEvent) => Promise<{ sessionId: string }>) => Promise<{ sessionId: string }>): void;
+  (name: "classic.SessionStart", handler: ($: ClaudeAPI, event: ClassicStartEvent,
+    next: (event: ClassicStartEvent) => Promise<unknown>) => Promise<unknown>): void;
   (name: "tool.call", handler: ($: ClaudeAPI, event: ToolEvent,
     next: (event: ToolEvent) => Promise<ToolResult>) => Promise<ToolResult>): void;
   (name: "session.start", handler: ($: ClaudeAPI, event: StartEvent,

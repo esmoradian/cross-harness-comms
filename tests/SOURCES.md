@@ -157,6 +157,13 @@ An independent daemon observer saw `thread/started` for a new unprompted thread;
 - Core lifecycle tests do not open real sockets or harnesses; transport tests do not run real Codex or model turns.
   Neither specifies detach behavior.
 
+## Claude lifecycle
+
+Claude lifecycle tests use the generated 2.1.289 `SessionEndInput` and `ClassicEventOf` declarations, confirmed in the real 2.1.296 clear check.
+`session.start` is per process or fresh mod load and never fires for `/clear`.
+`session.end` reports the old ID and reason; `classic.SessionStart` reports the replacement native ID after clear.
+The fake emits those events and changes its host session ID; registration, disconnect, tokens, and mailboxes remain product code.
+
 ## Detach
 
 `tests/detach.test.ts` uses the real client and core over the rig's in-memory streams.

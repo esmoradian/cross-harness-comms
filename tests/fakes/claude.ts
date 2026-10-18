@@ -1,11 +1,13 @@
 import { createServer, type Server } from "node:net";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 import type { ClaudeAPI, ClaudeOn, HookStream, ProcessRunInit, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, PromptInput,
-  SessionReceiveInput, SessionReceiveOrigin, SessionReceiveResult, SessionVersion, StartEvent, ToolEvent, ToolResult } from "../../adapters/claude/src/api.ts";
+  SessionReceiveInput, SessionReceiveOrigin, SessionReceiveResult, SessionVersion, StartEvent, EndEvent, ClassicStartEvent, ToolEvent, ToolResult } from "../../adapters/claude/src/api.ts";
 import { deferred, Queue } from "../helpers.ts";
 
 type ToolHandler = ($: ClaudeAPI, event: ToolEvent, next: (event: ToolEvent) => Promise<ToolResult>) => Promise<ToolResult>;
 type StartHandler = ($: ClaudeAPI, event: StartEvent, next: (event: StartEvent) => Promise<{ cwd: string }>) => Promise<{ cwd: string }>;
+type EndHandler = ($: ClaudeAPI, event: EndEvent, next: (event: EndEvent) => Promise<{ sessionId: string }>) => Promise<{ sessionId: string }>;
+type ClassicStartHandler = ($: ClaudeAPI, event: ClassicStartEvent, next: (event: ClassicStartEvent) => Promise<unknown>) => Promise<unknown>;
 type ReceiveHandler = ($: ClaudeAPI, event: SessionReceiveInput, next: (event: SessionReceiveInput) => Promise<SessionReceiveResult>) => Promise<SessionReceiveResult>;
 
 // What Claude Code 2.1.289's $.session.version() resolved in a real session on 2026-10-17.
@@ -90,6 +92,8 @@ export class FakeClaude {
   private timers: { delay: number; callback: () => void | Promise<void>; cancelled: boolean }[] = [];
   private toolHandlers: ToolHandler[] = [];
   private startHandlers: StartHandler[] = [];
+  private endHandlers: EndHandler[] = [];
+  private classicStartHandlers: ClassicStartHandler[] = [];
   private receiveHandlers: ReceiveHandler[] = [];
   private attachHold: ReturnType<typeof deferred<void>> | undefined;
   private aborters: AbortController[] = [];
@@ -98,14 +102,16 @@ export class FakeClaude {
   readonly env: Record<string, string>;
   version: SessionVersion;
 
-  constructor(readonly sessionId: string, readonly cwd: string, runtime: CliRuntime,
+  constructor(public sessionId: string, readonly cwd: string, runtime: CliRuntime,
     options: { env?: Record<string, string>; version?: SessionVersion } = {}) {
     this.env = { ...options.env };
     this.version = options.version ?? CLAUDE_VERSION;
-    this.on = ((name: string, handler: ToolHandler | StartHandler | ReceiveHandler) => {
+    this.on = ((name: string, handler: ToolHandler | StartHandler | EndHandler | ClassicStartHandler | ReceiveHandler) => {
       this.calls.push({ method: "on", args: [name, handler] });
       if (name === "tool.call") this.toolHandlers.push(handler as ToolHandler);
       else if (name === "session.start") this.startHandlers.push(handler as StartHandler);
+      else if (name === "session.end") this.endHandlers.push(handler as EndHandler);
+      else if (name === "classic.SessionStart") this.classicStartHandlers.push(handler as ClassicStartHandler);
       else if (name === "session.receive") this.receiveHandlers.push(handler as ReceiveHandler);
       else throw new Error(`Unsupported fake hook: ${name}`);
     }) as ClaudeOn;
@@ -128,7 +134,7 @@ export class FakeClaude {
       // Installed-build types: $.plugin.root is the plugin's absolute directory.
       plugin: { name: "cross-harness-comms", root: FakeClaude.pluginRoot },
       session: {
-        id: async () => { this.calls.push({ method: "session.id", args: [] }); return sessionId; },
+        id: async () => { this.calls.push({ method: "session.id", args: [] }); return this.sessionId; },
         cwd: async () => { this.calls.push({ method: "session.cwd", args: [] }); return cwd; },
         version: async () => { this.calls.push({ method: "session.version", args: [] }); return { ...this.version }; },
       },
@@ -225,6 +231,23 @@ export class FakeClaude {
       return e.tool === "ListAgents" ? { result: { listing: this.nativeListing } } : this.nativeResult;
     };
     return dispatch(0, event);
+  }
+  // Native /clear ends the old session, changes its ID, and emits the classic start hook.
+  // It does not fire session.start or reload the mod (generated Claude Code types).
+  async clear(nextId: string) {
+    const ending: EndEvent = { reason: "clear", sessionId: this.sessionId, resume: { id: this.sessionId } };
+    const end = async (i: number, event: EndEvent): Promise<{ sessionId: string }> => {
+      const hook = this.endHandlers[i];
+      return hook ? hook(this.api, event, next => end(i + 1, next)) : { sessionId: event.sessionId };
+    };
+    await end(0, ending);
+    this.sessionId = nextId;
+    const starting: ClassicStartEvent = { hook_event_name: "SessionStart", session_id: nextId, cwd: this.cwd, source: "clear" };
+    const start = async (i: number, event: ClassicStartEvent): Promise<unknown> => {
+      const hook = this.classicStartHandlers[i];
+      return hook ? hook(this.api, event, next => start(i + 1, next)) : {};
+    };
+    await start(0, starting);
   }
   // Runs the session.receive chain as Claude Code does for an inbound delivery.
   // The innermost `next` queues the delivery and resolves `{ text }`.
