@@ -171,6 +171,10 @@ The fake emits those events and changes its host session ID; registration, disco
   A rejected run stands in for a `comms` binary that fails to start, as `faults` does.
 - `settle()` in `tests/helpers.ts` waits one macrotask, so hooks already started reach their next real wait; while `ensure` is held every other fake step is a microtask, so this is ordering, not timing.
 - Starts and attachments are counted from the `ensure` entries in `runs` and the `attach` entries in `spawns`.
+- `end(reason)` runs the `session.end` chain for the current ID on its own; `clear(nextId)` is `end("clear")`, the ID change, and `classicStart("clear")`.
+- `holdReceive()` holds the innermost `next` of the next `session.receive` chain before it queues the delivery, with `entered` and `release()` like `holdRun`; several holds queue in order.
+- The review fix 2 tests in `claude-generation.test.ts` hold `detach`, `send`, `ensure`, `prompt.submit` (through `acceptGate`), and `session.receive`'s `next`, and fire a scheduled attach retry with `runScheduled()`, so every interleaving is set by a hold or the fake clock, not by timing.
+  A retry is scheduled by destroying the attachment's in-memory link and awaiting that child's `spawnResults` entry.
 
 ## Detach
 

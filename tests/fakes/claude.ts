@@ -98,6 +98,7 @@ export class FakeClaude {
   private receiveHandlers: ReceiveHandler[] = [];
   private attachHold: ReturnType<typeof deferred<void>> | undefined;
   private runHolds = new Map<string, { entered: () => void; gate: Promise<Error | undefined> }>();
+  private receiveHolds: { entered: () => void; gate: Promise<void> }[] = [];
   private aborters: AbortController[] = [];
 
   // `env` is the session's environment; Claude Code sets CLAUDE_CODE_MESSAGING_SOCKET in it.
@@ -245,14 +246,18 @@ export class FakeClaude {
   // Native /clear ends the old session, changes its ID, and emits the classic start hook.
   // It does not fire session.start or reload the mod (generated Claude Code types).
   async clear(nextId: string) {
-    const ending: EndEvent = { reason: "clear", sessionId: this.sessionId, resume: { id: this.sessionId } };
+    await this.end("clear");
+    this.sessionId = nextId;
+    await this.classicStart("clear");
+  }
+  // Runs the session.end chain for the current ID, as Claude Code does on exit, resume, or clear.
+  async end(reason: EndEvent["reason"] = "other") {
+    const ending: EndEvent = { reason, sessionId: this.sessionId, resume: { id: this.sessionId } };
     const end = async (i: number, event: EndEvent): Promise<{ sessionId: string }> => {
       const hook = this.endHandlers[i];
       return hook ? hook(this.api, event, next => end(i + 1, next)) : { sessionId: event.sessionId };
     };
-    await end(0, ending);
-    this.sessionId = nextId;
-    await this.classicStart("clear");
+    return end(0, ending);
   }
   async classicStart(source: ClassicStartEvent["source"]) {
     const starting: ClassicStartEvent = { hook_event_name: "SessionStart", session_id: this.sessionId, cwd: this.cwd, source };
@@ -269,6 +274,8 @@ export class FakeClaude {
     const dispatch = async (i: number, e: SessionReceiveInput): Promise<SessionReceiveResult> => {
       const hook = this.receiveHandlers[i];
       if (hook) return hook(this.api, e, next => dispatch(i + 1, next));
+      const hold = this.receiveHolds.shift();
+      if (hold) { hold.entered(); await hold.gate; }
       this.queued.push(e.text);
       return { text: e.text };
     };
@@ -297,6 +304,13 @@ export class FakeClaude {
     const entered = deferred<void>(), gate = deferred<Error | undefined>();
     this.runHolds.set(command, { entered: () => entered.resolve(), gate: gate.promise });
     return { entered: entered.promise, release: (error?: Error) => gate.resolve(error) };
+  }
+  // Holds the innermost `next` of the next session.receive chain not already held, before it queues
+  // the delivery. `entered` resolves when it is held; `release()` lets it queue and resolve.
+  holdReceive() {
+    const entered = deferred<void>(), gate = deferred<void>();
+    this.receiveHolds.push({ entered: () => entered.resolve(), gate: gate.promise });
+    return { entered: entered.promise, release: () => gate.resolve() };
   }
   holdAttachOutput() { this.attachHold ??= deferred<void>(); }
   releaseAttachOutput() {
