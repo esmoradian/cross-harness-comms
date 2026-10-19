@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { connectSession, type SessionClient } from "@cross-harness-comms/client";
 import { localRuntime } from "@cross-harness-comms/client/runtime";
@@ -8,7 +7,7 @@ import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client"
 import type { Component } from "@earendil-works/pi-tui";
 
 // Structural subset of Pi 0.85.1 extension types.
-export interface PiContext {
+interface PiContext {
   cwd: string;
   sessionManager: { getSessionId(): string };
 }
@@ -29,7 +28,7 @@ export interface PiTool {
     onUpdate: ((result: PiToolResult) => void) | undefined, ctx: PiContext): Promise<PiToolResult>;
 }
 // A custom message as Pi passes it to a message renderer.
-export interface PiCustomMessage {
+interface PiCustomMessage {
   role: "custom";
   customType: string;
   content: string | { type: string; text?: string }[];
@@ -169,6 +168,5 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
 }
 
 export default function extension(pi: PiAPI): void {
-  const bundled = fileURLToPath(new URL("../bin/comms", import.meta.url));
-  registerPi(pi, localRuntime(existsSync(bundled) ? bundled : "comms"));
+  registerPi(pi, localRuntime(fileURLToPath(new URL("../bin/comms", import.meta.url))));
 }

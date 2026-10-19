@@ -22,7 +22,7 @@ export interface McpCall {
   params: { name: string; arguments?: Record<string, unknown>; _meta?: Record<string, unknown> };
 }
 export interface McpResult { content: { type: "text"; text: string }[]; isError?: boolean }
-export interface CodexAdapter {
+interface CodexAdapter {
   toolsCall(request: McpCall): Promise<McpResult>;
   close(): Promise<void>;
 }

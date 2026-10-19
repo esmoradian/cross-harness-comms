@@ -40,7 +40,7 @@ export interface Delivery {
   cwd?: string;
 }
 
-export interface VersionRange { min: number; max: number }
+interface VersionRange { min: number; max: number }
 export interface HelloParams {
   versions: VersionRange;
   token?: string;
@@ -113,7 +113,7 @@ export type WirePacket =
   | { jsonrpc: "2.0"; id: string | number; result: unknown }
   | { jsonrpc: "2.0"; id: string | number | null; error: RpcError };
 
-export interface ConversionStep {
+interface ConversionStep {
   from: number;
   to: number;
   up(packet: WirePacket): WirePacket;
@@ -168,7 +168,7 @@ export function normalizeName(text: string): string | undefined {
 export const CLAUDE_INBOX_VERSIONS: readonly number[] = [1];
 export const CLAUDE_NATIVE_MIN_VERSION = "2.1.289";
 
-export interface ClaudeInboxLine {
+interface ClaudeInboxLine {
   msgV: number;
   msg_id: string;
   // The sender's `uds:` address.

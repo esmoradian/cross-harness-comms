@@ -11,11 +11,15 @@ export function createUnixPlatform(): Platform {
     dataDirectory: () => directory,
     socketAddress: () => address,
     binaryName: () => "comms",
-    async prepareListen() {
-      await mkdir(directory, { recursive: true, mode: 0o700 });
+    async prepareDataDirectory() {
+      // A non-directory already at the path fails mkdir with EEXIST; the check below refuses it.
+      await mkdir(directory, { recursive: true, mode: 0o700 }).catch(error => { if (error.code !== "EEXIST") throw error; });
       const stat = await lstat(directory);
       if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid?.()) throw new Error("Unsafe comms data directory");
       await chmod(directory, 0o700);
+      return directory;
+    },
+    async prepareListen() {
       const socket = await lstat(address).catch(error => {
         if (error.code === "ENOENT") return undefined;
         throw error;

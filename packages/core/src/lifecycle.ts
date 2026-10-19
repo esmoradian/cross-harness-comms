@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, unlink, chmod, copyFile, rename, lstat, readdir, rm } from "node:fs/promises";
+import { open, readFile, unlink, chmod, copyFile, rename, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
@@ -9,16 +9,7 @@ import { watchCodexDaemon } from "./codex/daemon.ts";
 import type { CommandIO } from "@cross-harness-comms/client";
 import type { CliRuntime } from "./cli.ts";
 
-export const CORE_VERSION = RELEASE_VERSION;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-async function directory(runtime: CliRuntime) {
-  const path = runtime.platform.dataDirectory();
-  await mkdir(path, { recursive: true, mode: 0o700 });
-  const stat = await lstat(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe data directory");
-  await chmod(path, 0o700);
-  return path;
-}
 async function lock(path: string): Promise<() => Promise<void>> {
   for (let i = 0; i < 200; i++) {
     try {
@@ -62,14 +53,14 @@ export async function pruneReleases(dataDirectory: string, current: string): Pro
 
 export async function ensure(runtime: CliRuntime): Promise<string> {
   const address = await start(runtime);
-  if (runtime.compiled) await pruneReleases(runtime.platform.dataDirectory(), CORE_VERSION);
+  if (runtime.compiled) await pruneReleases(runtime.platform.dataDirectory(), RELEASE_VERSION);
   return address;
 }
 
 async function start(runtime: CliRuntime): Promise<string> {
   // Injected transports need no installation or process creation.
   if (!runtime.command) { await probe(runtime); return runtime.platform.socketAddress(); }
-  const path = await directory(runtime);
+  const path = await runtime.platform.prepareDataDirectory();
   const unlock = await lock(join(path, "setup.lock"));
   try {
     let command = runtime.command;
@@ -77,16 +68,16 @@ async function start(runtime: CliRuntime): Promise<string> {
     const metadata = join(path, "installed-version");
     if (runtime.compiled) {
       const version = await readFile(metadata, "utf8").catch(() => "0.0.0");
-      if (compareVersions(CORE_VERSION, version.trim()) > 0) {
+      if (compareVersions(RELEASE_VERSION, version.trim()) > 0) {
         const temporary = installed + ".new";
         await copyFile(command[0]!, temporary);
         await chmod(temporary, 0o700);
         await rename(temporary, installed);
-        await Bun.write(metadata, CORE_VERSION);
+        await Bun.write(metadata, RELEASE_VERSION);
       }
       command = [installed];
     }
-    const installedVersion = runtime.compiled ? (await readFile(metadata, "utf8")).trim() : CORE_VERSION;
+    const installedVersion = runtime.compiled ? (await readFile(metadata, "utf8")).trim() : RELEASE_VERSION;
     const running = await probe(runtime).catch(() => undefined);
     if (running && compareVersions(running.version, installedVersion) >= 0) return runtime.platform.socketAddress();
     if (running) {
@@ -111,7 +102,7 @@ async function start(runtime: CliRuntime): Promise<string> {
 }
 
 export async function serve(io: CommandIO, runtime: CliRuntime): Promise<number> {
-  const path = await directory(runtime);
+  const path = await runtime.platform.prepareDataDirectory();
   const unlock = await lock(join(path, "serve.lock"));
   let core: ReturnType<typeof createCore> | undefined;
   let server: ReturnType<typeof createServer> | undefined;

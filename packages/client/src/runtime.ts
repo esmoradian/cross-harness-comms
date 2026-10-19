@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 import { spawn } from "node:child_process";
 import type { AdapterRuntime } from "./index.ts";
 
-export async function runProcess(argv: readonly string[], input?: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+async function runProcess(argv: readonly string[], input?: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0]!, argv.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "", stderr = "";
@@ -16,7 +16,7 @@ export async function runProcess(argv: readonly string[], input?: string): Promi
   });
 }
 
-export function localRuntime(binary = "comms"): AdapterRuntime {
+export function localRuntime(binary: string): AdapterRuntime {
   return {
     host: hostname(),
     notice: text => process.stderr.write(text + "\n"),

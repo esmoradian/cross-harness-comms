@@ -1,10 +1,11 @@
 import { activeAgo, COMMS_TOOLS, formatMessage, hiddenLine, messageId, splitLines, VERSION_RANGE, sendSummary, type Agent, type Delivery, type HelloResult, type MethodTable, type SendResult, type WirePacket } from "@cross-harness-comms/protocol";
 import type { ClaudeAPI, ClaudeOn, ProcessRunResult, ToolEvent, ToolResult } from "./api.ts";
 
-type Options = { binary: string; host: string };
+type Options = { binary?: string; host: string };
 
 interface ClaudeState {
-  binary: string;
+  // The `comms` to run, the plugin's own `bin/comms` unless registered with another.
+  binary: string | undefined;
   token: string | undefined;
   // The newest token the core issued, kept after session.end clears `token`, so the hello after /clear names the identity it replaces.
   lastToken: string | undefined;
@@ -19,10 +20,15 @@ interface ClaudeState {
   sends: Map<string, Promise<unknown>>;
 }
 
+// Mods get no CLAUDE_PLUGIN_ROOT; $.plugin.root is the plugin's directory.
+function binary($: ClaudeAPI, state: ClaudeState): string {
+  return state.binary ?? `${$.plugin.root}/bin/comms`;
+}
+
 // Claude's validator allows passing $ only to helpers declared at module scope.
 // `name` is the CLI command, with its arguments after it.
 function comms($: ClaudeAPI, state: ClaudeState, name: string | readonly string[], params?: unknown): Promise<ProcessRunResult> {
-  return $.process.run([state.binary, ...[name].flat()], params === undefined ? {} : { stdin: JSON.stringify(params) + "\n" });
+  return $.process.run([binary($, state), ...[name].flat()], params === undefined ? {} : { stdin: JSON.stringify(params) + "\n" });
 }
 
 // A command whose result the tools read: failures carry the exit code, and a notice is shown.
@@ -101,14 +107,12 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: Options): 
   if (state.sessionId === previousSession) state.token = previousToken;
   else { pendingReplies.clear(); received.clear(); seenNatively.clear(); sends.clear(); }
   const session = { harness: "claude", session_key: state.sessionId, cwd: await $.session.cwd(), host: options.host };
-  // Mods get no CLAUDE_PLUGIN_ROOT; $.plugin.root is the plugin's directory.
-  if (state.binary === "comms") state.binary = `${$.plugin.root}/bin/comms`;
   // Claude's inbox socket, which the core writes native peer lines to.
   const inbox = await $.env!.get("CLAUDE_CODE_MESSAGING_SOCKET");
   owned();
   state.nativePeers = !!inbox;
   const claude = inbox ? { inbox, version: (await $.session.version!()).version } : undefined;
-  const ensure = await $.process.run([state.binary, "ensure"]);
+  const ensure = await $.process.run([binary($, state), "ensure"]);
   if (ensure.exitCode) throw new Error(ensure.stderr || "comms ensure failed");
   owned();
   let resolveReady!: () => void, rejectReady!: (error: unknown) => void;
@@ -119,7 +123,7 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: Options): 
     if (run !== state.generation) { rejectReady(new Error("comms session changed")); return; }
     let initialized = false;
     try {
-      const child = $.process.spawn({ argv: [state.binary, "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...(state.token ? { token: state.token } : {}), ...(replaces ? { replaces } : {}), ...(claude ? { claude } : {}) }) + "\n" });
+      const child = $.process.spawn({ argv: [binary($, state), "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...(state.token ? { token: state.token } : {}), ...(replaces ? { replaces } : {}), ...(claude ? { claude } : {}) }) + "\n" });
       let buffer = "";
       for await (const chunk of child) {
         if (run !== state.generation) break;
@@ -347,5 +351,5 @@ export function registerClaude(on: ClaudeOn, options: Options): { close(): Promi
 }
 
 export function register(on: ClaudeOn): void {
-  registerClaude(on, { binary: "comms", host: "localhost" });
+  registerClaude(on, { host: "localhost" });
 }

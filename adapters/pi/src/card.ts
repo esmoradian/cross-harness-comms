@@ -26,7 +26,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { CommsMessageDetails, PiTheme } from "./index.ts";
 
-export class CommsCard implements Component {
+class CommsCard implements Component {
   constructor(private details: CommsMessageDetails, private theme: PiTheme, private collapsed: boolean) {}
 
   invalidate(): void {}

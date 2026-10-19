@@ -1,8 +1,8 @@
 import type { Duplex } from "node:stream";
 import { createClient, readPackets, writePacket, type CommandIO } from "@cross-harness-comms/client";
-import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
+import { RELEASE_VERSION, VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
-import { ensure, serve, CORE_VERSION } from "./lifecycle.ts";
+import { ensure, serve } from "./lifecycle.ts";
 import { runMcp, codexHook, type CodexHost } from "@cross-harness-comms/codex/mcp";
 
 export interface CliRuntime {
@@ -13,7 +13,7 @@ export interface CliRuntime {
 }
 
 // `optional` input may be empty, which reads as `{}`.
-export async function readInput(io: CommandIO, optional = false): Promise<Record<string, unknown>> {
+async function readInput(io: CommandIO, optional = false): Promise<Record<string, unknown>> {
   let text = "";
   for await (const chunk of io.stdin) {
     text += chunk;
@@ -29,24 +29,28 @@ export async function readInput(io: CommandIO, optional = false): Promise<Record
 const HELP = `comms - cross-harness agent communication
 
 Usage: comms <command>
-  ensure                 Install/start the newest local core; print its address
-  serve                  Run the core until interrupted
-  attach                 Register from JSON stdin and stream protocol packets
-  send                   Send JSON on stdin: token, id, to, body, optional reply_to
-  ack                    Acknowledge JSON on stdin: token, id
-  native-ack             Acknowledge a native Claude inbox line, JSON on stdin: token, from
-  detach                 Close a session using its token on stdin
-  list                   List agents and presence as JSON; optional JSON stdin: token, include_stale
-  resolve                Find the agent named exactly, JSON on stdin: name, optional token, skip_claude
+
+Commands:
+  list                    List agents and presence as JSON; optional JSON stdin: token, include_stale
+  status                  Show core and protocol versions
+  inspect <message-id>    Inspect delivery state
   rename <address> <name> Rename an agent
-  name <name>            Choose this session's name, using its token on stdin
-  inspect <message-id>   Inspect delivery state
-  status                 Show core and protocol versions
-  mcp                    Run the Codex MCP server over stdio
-  session-start          Mark a Codex thread online from its SessionStart hook JSON
-  session-end            Mark a Codex thread offline from its SessionEnd hook JSON
-  version                Print binary version
-  help                   Show this help
+  version                 Print binary version
+  help                    Show this help
+
+Used by the harness plugins:
+  ensure                  Install/start the newest local core; print its address
+  serve                   Run the core until interrupted
+  attach                  Register from JSON stdin and stream protocol packets
+  send                    Send JSON on stdin: token, id, to, body, optional reply_to
+  ack                     Acknowledge JSON on stdin: token, id
+  native-ack              Acknowledge a native Claude inbox line, JSON on stdin: token, from
+  detach                  Close a session using its token on stdin
+  resolve                 Find the agent named exactly, JSON on stdin: name, optional token, skip_claude
+  name <name>             Choose this session's name, using its token on stdin
+  mcp                     Run the Codex MCP server over stdio
+  session-start           Mark a Codex thread online from its SessionStart hook JSON
+  session-end             Mark a Codex thread offline from its SessionEnd hook JSON
 `;
 
 // Commands forwarded to one core method, with how each reads its params, after the hello.
@@ -88,7 +92,7 @@ export async function runCli(argv: readonly string[], io: CommandIO, runtime: Cl
   const command = argv[0] ?? "help";
   try {
     if (["help", "--help", "-h"].includes(command)) { io.stdout(HELP); return 0; }
-    if (["version", "--version"].includes(command)) { io.stdout(CORE_VERSION + "\n"); return 0; }
+    if (["version", "--version"].includes(command)) { io.stdout(RELEASE_VERSION + "\n"); return 0; }
     if (command === "ensure") { io.stdout(await ensure(runtime) + "\n"); return 0; }
     if (command === "serve") return await serve(io, runtime);
     if (command === "mcp") return await runMcp(io, codexHost(runtime));

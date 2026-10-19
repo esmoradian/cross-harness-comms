@@ -4,7 +4,7 @@ import { RELEASE_VERSION } from "@cross-harness-comms/protocol";
 
 const root = join(import.meta.dir, "..");
 const UNIX_TARGETS = ["bun-darwin-arm64", "bun-darwin-x64", "bun-linux-arm64", "bun-linux-x64"];
-export type ReleaseTarget = "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64";
+type ReleaseTarget = "darwin-arm64" | "darwin-x64" | "linux-arm64" | "linux-x64";
 const RELEASE_TARGETS: ReleaseTarget[] = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
 // `compareVersions` ignores pre-release suffixes, and a version names a directory, so only plain versions are built.
 const PLAIN_VERSION = /^\d+\.\d+\.\d+$/;
