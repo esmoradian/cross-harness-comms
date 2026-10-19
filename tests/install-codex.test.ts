@@ -11,9 +11,8 @@ import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 
 const HEADER = '[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]';
 const SECTION = `${HEADER}\napproval_mode = "approve"`;
-// What `comms install codex` printed before it offered the standing approval.
-const CURRENT = "Add the built local marketplace, then run codex plugin add cross-harness-comms@comms-local and trust its SessionStart hook.\n"
-  + "Keep the compiled comms binary on PATH for local development.\n";
+// The published install, which `comms install codex` prints, each command on a line of its own, before it offers the standing approval.
+const PUBLISHED = ["codex plugin marketplace add esmoradian/cross-harness-comms --ref release", "codex plugin add cross-harness-comms@comms"];
 
 let home: string;
 let previous: string | undefined;
@@ -58,11 +57,16 @@ function approval(text: string): unknown {
   return parsed.plugins?.["cross-harness-comms@comms-local"]?.mcp_servers?.comms?.tools?.comms_send?.approval_mode;
 }
 
-test("install codex: prints the current instructions, then offers the reply approval section and --allow-replies, changing nothing", async () => {
+test("install codex: prints the published install commands, then offers the reply approval section and --allow-replies, changing nothing", async () => {
   const result = await install();
   expect(result.exitCode).toBe(0);
-  expect(result.stdout.startsWith(CURRENT)).toBe(true);
-  const offer = result.stdout.slice(CURRENT.length);
+  const lines = result.stdout.split("\n").map(line => line.trim());
+  const [marketplace, plugin] = PUBLISHED.map(command => lines.indexOf(command));
+  expect(marketplace).toBeGreaterThanOrEqual(0);
+  expect(plugin).toBeGreaterThan(marketplace!);
+  // The dist-based local instructions are gone.
+  expect(lines.slice(0, plugin! + 1).join("\n")).not.toMatch(/\bdist\b|comms-local/);
+  const offer = lines.slice(plugin! + 1).join("\n");
   expect(offer).toContain(SECTION + "\n");
   expect(offer).toContain("comms install codex --allow-replies");
   expect(existsSync(config())).toBe(false);
