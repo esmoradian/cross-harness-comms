@@ -1,6 +1,4 @@
 import type { Duplex } from "node:stream";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { createClient, readPackets, writePacket, type CommandIO } from "@cross-harness-comms/client";
 import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
@@ -47,7 +45,6 @@ Usage: comms <command>
   mcp                    Run the Codex MCP server over stdio
   session-start          Mark a Codex thread online from its SessionStart hook JSON
   session-end            Mark a Codex thread offline from its SessionEnd hook JSON
-  install <harness>      Print the published install commands for claude or codex
   version                Print binary version
   help                   Show this help
 `;
@@ -82,21 +79,6 @@ const COMMANDS: Record<string, [RequestMethod, Params]> = {
   status: ["status", async () => ({})],
 };
 
-// Codex's standing authorization for comms replies, which its automatic review otherwise rejects. It names the published plugin;
-// a local build's `@comms-local` approval is declared by hand.
-const CODEX_APPROVAL = '[plugins."cross-harness-comms@comms".mcp_servers.comms.tools.comms_send]\napproval_mode = "approve"\n';
-
-// Appends the approval section to Codex's config unless its table is already there, leaving the rest untouched.
-async function allowCodexReplies(io: CommandIO, platform: Platform): Promise<void> {
-  const path = join(platform.codexHome(), "config.toml");
-  const current = await readFile(path, "utf8").catch(() => undefined);
-  if (current?.includes(CODEX_APPROVAL.split("\n")[0]!)) { io.stdout(`Comms replies are already allowed in ${path}.\n`); return; }
-  await mkdir(platform.codexHome(), { recursive: true });
-  const separator = !current ? "" : current.endsWith("\n") ? "\n" : "\n\n";
-  await writeFile(path, (current ?? "") + separator + "# Let agents reply to each other through comms without auto-review.\n" + CODEX_APPROVAL);
-  io.stdout(`Allowed comms replies without review in ${path}.\n`);
-}
-
 // What the Codex MCP server and hooks need from the core, passed in so the adapter does not import the core.
 function codexHost(runtime: CliRuntime): CodexHost {
   return { connect: runtime.connect, ensure: () => ensure(runtime), processExecutable: pid => runtime.platform.processExecutable(pid) };
@@ -111,21 +93,6 @@ export async function runCli(argv: readonly string[], io: CommandIO, runtime: Cl
     if (command === "serve") return await serve(io, runtime);
     if (command === "mcp") return await runMcp(io, codexHost(runtime));
     if (command === "session-start" || command === "session-end") return await codexHook(await readInput(io), codexHost(runtime));
-    if (command === "install") {
-      // The published install: the `release` branch marketplace, then the plugin from it.
-      const instructions: Record<string, string> = {
-        claude: "Install comms from its published release:\n\n"
-          + "  claude plugin marketplace add esmoradian/cross-harness-comms#release\n  claude plugin install cross-harness-comms@comms\n",
-        codex: "Install comms from its published release, then trust its SessionStart hook:\n\n"
-          + "  codex plugin marketplace add esmoradian/cross-harness-comms --ref release\n  codex plugin add cross-harness-comms@comms\n",
-      };
-      if (!argv[1] || !instructions[argv[1]]) throw new Error("Supported integrations: claude, codex");
-      if (argv[1] === "codex" && argv[2] === "--allow-replies") { await allowCodexReplies(io, runtime.platform); return 0; }
-      io.stdout(instructions[argv[1]]!);
-      if (argv[1] === "codex") io.stdout("\nCodex's automatic review asks you before each reply to another agent. To let agents reply through comms\n"
-        + "without review, add this to ~/.codex/config.toml, or run comms install codex --allow-replies:\n\n" + CODEX_APPROVAL);
-      return 0;
-    }
     if (command === "attach") {
       const params = await readInput(io) as unknown as HelloParams;
       const stream = await runtime.connect(runtime.platform.socketAddress());
