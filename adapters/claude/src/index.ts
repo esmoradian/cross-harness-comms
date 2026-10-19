@@ -336,7 +336,8 @@ export function registerClaude(on: ClaudeOn, options: Options): { close(): Promi
   });
   on("tool.call", async ($, event, next) => {
     if (event.tool === `mcp__${$.plugin.name}__${NAME_TOOL.name}`) {
-      try { return { result: { success: true, message: await chooseName($, state, String((event as { name?: unknown }).name)) } }; }
+      // A registered tool's result must be text or content blocks, unlike SendMessage's object.
+      try { return { result: await chooseName($, state, String((event as { name?: unknown }).name)) }; }
       catch (error) { return { deny: error instanceof Error ? error.message : "Naming failed" }; }
     }
     if (event.tool === "SendMessage") return sendMessage($, state, event, next);

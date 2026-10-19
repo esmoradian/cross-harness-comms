@@ -1,5 +1,5 @@
 // The release version of the core, CLI, and plugins; `comms ensure` replaces only an older core.
-export const RELEASE_VERSION = "0.1.25";
+export const RELEASE_VERSION = "0.1.26";
 export type Harness = "pi" | "claude" | "codex";
 
 export interface SessionRegistration {
@@ -133,14 +133,16 @@ export function formatMessage(delivery: Delivery, receiver: "codex" | "claude"):
 }
 
 export function resolveAddress(address: string, agents: readonly Agent[]): Agent {
-  if (!address.startsWith("comms:")) throw failure("UNKNOWN_RECIPIENT");
-  const key = address.slice(6);
+  // A plain name or ID means `comms:`; any other scheme is not ours.
+  const scheme = /^([^:]*):/.exec(address)?.[1];
+  if (scheme !== undefined && scheme !== "comms") throw failure("UNKNOWN_RECIPIENT", `No agent at ${address}`);
+  const key = scheme === undefined ? address : address.slice(6);
   const exact = agents.find(agent => agent.name === key || agent.id === key);
   if (exact) return exact;
   const matches = key.length >= 8 && /^[0-9a-f-]+$/.test(key)
     ? agents.filter(agent => agent.id.startsWith(key)) : [];
   if (matches.length > 1) throw failure("AMBIGUOUS_RECIPIENT");
-  if (!matches[0]) throw failure("UNKNOWN_RECIPIENT");
+  if (!matches[0]) throw failure("UNKNOWN_RECIPIENT", `No agent named ${key}`);
   return matches[0];
 }
 
@@ -227,7 +229,7 @@ export function sendSummary(result: SendResult): string {
 export const COMMS_TOOLS = [
   { name: "comms_send", description: "Send a message to a comms address. Reply with reply_to set to the message ID.", inputSchema: {
     type: "object", properties: {
-      to: { type: "string", description: "Recipient comms address" },
+      to: { type: "string", description: "Recipient name, ID, or comms:<name>" },
       text: { type: "string" }, reply_to: { type: "string" },
     }, required: ["to", "text"], additionalProperties: false,
   } },
