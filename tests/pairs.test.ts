@@ -93,7 +93,7 @@ for (const from of harnesses) for (const to of harnesses) {
   });
 }
 
-test("pair claude -> claude: native messages and replies pass through unchanged (invariant 10)", async () => {
+test("pair claude -> claude: native messages and replies pass through unchanged", async () => {
   await withRig(async rig => {
     const a = await rig.harness("claude");
     const b = await rig.harness("claude");

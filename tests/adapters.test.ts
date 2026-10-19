@@ -7,7 +7,7 @@ import { deferred, eventually, uuid } from "./support/helpers.ts";
 import { registration, withRig } from "./support/rig.ts";
 
 for (const harness of ["pi", "claude", "codex"] as Harness[]) {
-  test(`invariant 2: ${harness} derives sender identity from its native session, ignoring tool identity fields`, async () => {
+  test(`${harness} derives sender identity from its native session, ignoring tool identity fields`, async () => {
     await withRig(async rig => {
       const sender = await rig.harness(harness);
       const recipient = await rig.harness("pi");
@@ -38,7 +38,7 @@ for (const harness of ["pi", "claude", "codex"] as Harness[]) {
 }
 
 for (const metadata of [null, { session_id: "not-a-thread-id" }]) {
-  test(`invariant 2: Codex refuses ${metadata === null ? "missing metadata" : "metadata without thread_id"} instead of guessing the thread`, async () => {
+  test(`Codex refuses ${metadata === null ? "missing metadata" : "metadata without thread_id"} instead of guessing the thread`, async () => {
     await withRig(async rig => {
       const target = await rig.peer();
       const b = await target.register(registration("pi"));
@@ -57,7 +57,7 @@ for (const metadata of [null, { session_id: "not-a-thread-id" }]) {
   });
 }
 
-test("invariant 2: Codex uses thread_id rather than the different session_id in turn metadata", async () => {
+test("Codex uses thread_id rather than the different session_id in turn metadata", async () => {
   await withRig(async rig => {
     const target = await rig.peer();
     const b = await target.register(registration("pi"));
@@ -76,7 +76,7 @@ test("invariant 2: Codex uses thread_id rather than the different session_id in 
 });
 
 for (const harness of ["claude", "codex"] as const) {
-  test(`invariant 9: ${harness} acknowledges only after its harness accepts the non-user delivery`, async () => {
+  test(`${harness} acknowledges only after its harness accepts the non-user delivery`, async () => {
     await withRig(async rig => {
       const sender = await rig.harness("pi");
       const receiver = await rig.harness(harness);
@@ -101,7 +101,7 @@ for (const harness of ["claude", "codex"] as const) {
   });
 }
 
-test("invariant 8: Claude passes the attach token to send and ack on stdin only", async () => {
+test("Claude passes the attach token to send and ack on stdin only", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), pi = await rig.harness("pi");
     const fake = claude.fake as FakeClaude;
@@ -132,7 +132,7 @@ test("invariant 8: Claude passes the attach token to send and ack on stdin only"
   });
 });
 
-test("invariant 10: a comms marker in message text does not intercept a native Claude recipient", async () => {
+test("a comms marker in message text does not intercept a native Claude recipient", async () => {
   await withRig(async rig => {
     const session = await rig.harness("claude");
     const fake = session.fake as FakeClaude;

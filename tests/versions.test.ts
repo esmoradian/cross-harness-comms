@@ -38,7 +38,7 @@ const policy: VersionPolicy = {
   }],
 };
 
-test("invariant 11: newer core converts requests, responses, lists, and deliveries at each negotiated edge", async () => {
+test("versions: newer core converts requests, responses, lists, and deliveries at each negotiated edge", async () => {
   await withRig(async rig => {
     const older = await rig.peer(), newer = await rig.peer();
     const a = await older.register(registration("pi"), { min: 100, max: 100 });
@@ -75,7 +75,7 @@ test("invariant 11: newer core converts requests, responses, lists, and deliveri
 });
 
 for (const version of [99, 102]) {
-  test(`invariant 11: no protocol overlap at version ${version} fails explicitly`, async () => {
+  test(`versions: no protocol overlap at version ${version} fails explicitly`, async () => {
     await withRig(async rig => {
       const peer = await rig.peer();
       await expect(peer.request("hello", { versions: { min: version, max: version }, session: registration("pi") }))
@@ -85,7 +85,7 @@ for (const version of [99, 102]) {
   });
 }
 
-test("invariant 11: production v1 negotiates without synthetic conversion steps", async () => {
+test("versions: production v1 negotiates without synthetic conversion steps", async () => {
   await withRig(async rig => {
     const peer = await rig.peer();
     const hello = await peer.register(registration("pi"));

@@ -3,7 +3,7 @@ import { resolveAddress, type Agent } from "@cross-harness-comms/protocol";
 import { eventually, uuid, uuidV7 } from "./support/helpers.ts";
 import { registration, withRig } from "./support/rig.ts";
 
-test("invariant 1: resume after core restart retains identity, name, and queued mail", async () => {
+test("core: resume after core restart retains identity, name, and queued mail", async () => {
   await withRig(async rig => {
     const sender = await rig.peer(), receiver = await rig.peer();
     const native = registration("pi");
@@ -27,7 +27,7 @@ test("invariant 1: resume after core restart retains identity, name, and queued 
   });
 });
 
-test("invariant 3: name and UUID address reach only the intended peer; unknown recipients store nothing", async () => {
+test("core: name and UUID address reach only the intended peer; unknown recipients store nothing", async () => {
   await withRig(async rig => {
     const sender = await rig.peer(), target = await rig.peer(), bystander = await rig.peer();
     const a = await sender.register(registration("pi"));
@@ -52,7 +52,7 @@ const addressAgents: Agent[] = [
   { id: "019f1234-0000-7000-8000-000000000001", name: "pi-shared", harness: "pi", session_key: "a", host: "h", cwd: "/p", last_seen: "2026-10-17T00:00:00Z", online: true },
   { id: "019f1234-0000-7000-8000-000000000002", name: "pi-shared-2", harness: "pi", session_key: "b", host: "h", cwd: "/p", last_seen: "2026-10-17T00:00:00Z", online: false },
 ];
-test("invariant 3: ambiguous UUID prefix fails instead of selecting the first match", () => {
+test("core: ambiguous UUID prefix fails instead of selecting the first match", () => {
   // A successful lookup first ensures the placeholder fails openly, not inside an expected rejection.
   expect(resolveAddress("comms:pi-shared", addressAgents).id).toBe(addressAgents[0]!.id);
   expect(() => resolveAddress("comms:019f1234", addressAgents)).toThrow("AMBIGUOUS_RECIPIENT");
@@ -76,7 +76,7 @@ test("plain names: resolveAddress takes an address without a scheme as a comms n
   for (const address of ["uds:pi-shared", "uds:x", "http:pi-shared", `other:${agents[0]!.id}`]) expect(code(address), address).toBe("UNKNOWN_RECIPIENT");
 });
 
-test("invariant 4: send confirmation follows a durable write and retries do not duplicate it", async () => {
+test("core: send confirmation follows a durable write and retries do not duplicate it", async () => {
   await withRig(async rig => {
     const sender = await rig.peer(), receiver = await rig.peer();
     const senderSession = registration("pi");
@@ -97,7 +97,7 @@ test("invariant 4: send confirmation follows a durable write and retries do not 
   });
 });
 
-test("invariant 5: an offline mailbox drains in stored order for one sender and receiver", async () => {
+test("core: an offline mailbox drains in stored order for one sender and receiver", async () => {
   await withRig(async rig => {
     const sender = await rig.peer(), receiver = await rig.peer();
     const a = await sender.register(registration("pi"));
@@ -116,7 +116,7 @@ test("invariant 5: an offline mailbox drains in stored order for one sender and 
   });
 });
 
-test("invariant 6: reconnect redelivers unacked mail and never redelivers acked mail", async () => {
+test("core: reconnect redelivers unacked mail and never redelivers acked mail", async () => {
   await withRig(async rig => {
     const sender = await rig.peer(), receiver = await rig.peer();
     const a = await sender.register(registration("pi"));
@@ -146,7 +146,7 @@ test("invariant 6: reconnect redelivers unacked mail and never redelivers acked 
 });
 
 for (const token of [undefined, "invalid-session-token"]) {
-  test(`invariant 8: ${token === undefined ? "missing" : "invalid"} token cannot send or acknowledge`, async () => {
+  test(`core: ${token === undefined ? "missing" : "invalid"} token cannot send or acknowledge`, async () => {
     await withRig(async rig => {
       const sender = await rig.peer(), receiver = await rig.peer();
       const a = await sender.register(registration("pi"));
@@ -164,7 +164,7 @@ for (const token of [undefined, "invalid-session-token"]) {
   });
 }
 
-test("invariant 8: a valid token binds the sender and cannot acknowledge someone else's mail", async () => {
+test("core: a valid token binds the sender and cannot acknowledge someone else's mail", async () => {
   await withRig(async rig => {
     const sender = await rig.peer(), receiver = await rig.peer();
     const a = await sender.register(registration("pi"));
