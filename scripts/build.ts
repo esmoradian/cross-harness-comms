@@ -122,6 +122,11 @@ async function compile(target: string, outfile: string): Promise<void> {
   const build = Bun.spawn([process.execPath, "build", "--compile", `--target=${target}`, entry, "--outfile", outfile],
     { cwd: root, stdout: "inherit", stderr: "inherit" });
   if (await build.exited) throw new Error(`Core build failed for ${target}`);
+  // Bun appends the bundle after linking, which invalidates the linker's ad-hoc signature, so macOS cores are signed again.
+  if (target.startsWith("bun-darwin-")) {
+    const sign = Bun.spawn(["codesign", "--force", "--sign", "-", outfile], { stdout: "inherit", stderr: "inherit" });
+    if (await sign.exited) throw new Error(`Signing the ${target} core failed; macOS cores must be built on macOS`);
+  }
 }
 
 async function release(): Promise<void> {
