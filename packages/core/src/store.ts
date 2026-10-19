@@ -24,12 +24,7 @@ export function openStore(path: string) {
     CREATE TABLE IF NOT EXISTS codex_threads (agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS codex_lifecycle (
       agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL,
-      runtime_state TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, ended_at INTEGER, daemon_owned INTEGER NOT NULL DEFAULT 0);
-    INSERT OR IGNORE INTO codex_lifecycle (agent, executable, runtime_state)
-      SELECT agent, executable, 'unknown' FROM codex_threads;`);
-  // Earlier event-driven builds persisted lifecycle rows before end timestamps existed.
-  const lifecycleColumns = db.query("PRAGMA table_info(codex_lifecycle)").all() as { name: string }[];
-  if (!lifecycleColumns.some(column => column.name === "ended_at")) db.exec("ALTER TABLE codex_lifecycle ADD COLUMN ended_at INTEGER");
+      runtime_state TEXT NOT NULL, ended INTEGER NOT NULL DEFAULT 0, ended_at INTEGER, daemon_owned INTEGER NOT NULL DEFAULT 0);`);
   // Chosen names came later; existing names stay unchosen. No index, key, or check, so the column stays droppable.
   const agentColumns = db.query("PRAGMA table_info(agents)").all() as { name: string }[];
   if (!agentColumns.some(column => column.name === "name_chosen")) db.exec("ALTER TABLE agents ADD COLUMN name_chosen INTEGER NOT NULL DEFAULT 0");
