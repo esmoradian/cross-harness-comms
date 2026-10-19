@@ -1,0 +1,12 @@
+{
+  "name": "comms",
+  "owner": {
+    "name": "esmoradian"
+  },
+  "plugins": [
+    {
+      "name": "cross-harness-comms",
+      "source": "./plugins/claude"
+    }
+  ]
+}

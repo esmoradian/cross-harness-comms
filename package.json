@@ -1,0 +1,11 @@
+{
+  "name": "cross-harness-comms",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./plugins/pi/src/index.js"
+    ]
+  }
+}

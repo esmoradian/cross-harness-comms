@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "comms": {
+      "command": "/bin/sh",
+      "args": ["-c", "exec ./bin/comms mcp"],
+      "cwd": "."
+    }
+  }
+}
