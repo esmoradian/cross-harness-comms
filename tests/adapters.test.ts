@@ -5,6 +5,7 @@ import { FakeClaude } from "./support/fakes/claude.ts";
 import { FakeCodex } from "./support/fakes/codex.ts";
 import { deferred, eventually, uuid } from "./support/helpers.ts";
 import { registration, withRig } from "./support/rig.ts";
+import { registerClaude } from "../adapters/claude/src/index.ts";
 
 for (const harness of ["pi", "claude", "codex"] as Harness[]) {
   test(`${harness} derives sender identity from its native session, ignoring tool identity fields`, async () => {
@@ -144,6 +145,7 @@ test("a comms marker in message text does not intercept a native Claude recipien
   });
 });
 
+// The rig registers Claude without `binary`, as production does.
 test("claude runs the binary bundled in its plugin directory, not one on PATH", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude");
@@ -153,6 +155,22 @@ test("claude runs the binary bundled in its plugin directory, not one on PATH", 
     for (const program of argv0) expect(program).toBe(`${FakeClaude.pluginRoot}/bin/comms`);
   });
 });
+
+// `binary`, when given, is used as given, including a bare `comms`, which is no longer a placeholder for the plugin's own.
+for (const binary of ["/opt/comms/bin/comms", "comms"]) {
+  test(`claude registered with binary ${binary} runs exactly that`, async () => {
+    await withRig(async rig => {
+      const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
+      const handle = registerClaude(fake.on, { binary, host: "fixture-host" });
+      try {
+        await fake.start();
+        const argv0 = [...fake.runs.map(r => r.argv[0]), ...fake.spawns.map(s => s.argv[0])];
+        expect(argv0.length).toBeGreaterThan(0);
+        for (const program of argv0) expect(program).toBe(binary);
+      } finally { fake.close(); await handle.close(); }
+    });
+  });
+}
 
 // Claude's native list shows its peers by short refs, not session IDs, so when
 // native peer messaging is on, Claude peers are reached natively and appear once.

@@ -29,7 +29,7 @@ function runtime(): CliRuntime {
     platform: {
       dataDirectory: () => join(root, "data"), socketAddress: () => "memory://comms", binaryName: () => "comms",
       processExecutable: async () => undefined, codexHome: () => join(root, "codex"),
-      prepareListen: refuse("listen"), restrictAccess: refuse("change socket permissions"), watchParent: () => () => {},
+      prepareDataDirectory: refuse("prepare the data directory"), prepareListen: refuse("listen"), restrictAccess: refuse("change socket permissions"), watchParent: () => () => {},
     },
   };
 }

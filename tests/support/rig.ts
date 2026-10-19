@@ -155,6 +155,7 @@ export class Rig {
     return { connect: this.connect, platform: {
       dataDirectory: () => this.directory, socketAddress: () => "memory://comms", binaryName: () => "comms",
       processExecutable: async () => this.codexExecutable, codexHome: () => join(this.directory, "codex"),
+      prepareDataDirectory: async () => this.directory,
       prepareListen: async () => { throw new Error("Unit tests must not listen"); },
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
       watchParent: onGone => {
@@ -191,10 +192,10 @@ export class Rig {
         if (options.claude.listen !== false) this.inboxes.push(await claude.listenInbox(inbox));
       } else claude = new FakeClaude(sessionId, cwd, this.cliRuntime());
       fake = claude;
-      handle = registerClaude(claude.on, { binary: "comms", host: "fixture-host" });
+      handle = registerClaude(claude.on, { host: "fixture-host" });
       this.handles.push(handle);
       await claude.start();
-      send = (to, text, reply_to, extra) => claude.tool({ tool: "SendMessage", tool_use_id: uuid(), to,
+      send = (to, text, _reply_to, extra) => claude.tool({ tool: "SendMessage", tool_use_id: uuid(), to,
         message: text, ...extra });
       list = () => claude.tool({ tool: "ListAgents", tool_use_id: uuid() });
       incoming = () => claude.incoming.map(call => call.text);

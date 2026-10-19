@@ -162,7 +162,7 @@ test("a session.receive whose next resolves after /clear sends no native-ack and
 test("session.end during a start, before registration, settles it with an error and no attachment spawns", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
-    const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
+    const handle = registerClaude(fake.on, { host: "fixture-host" });
     try {
       const held = fake.holdRun("ensure");
       const starting = fake.start();

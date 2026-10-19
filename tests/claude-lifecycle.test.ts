@@ -7,7 +7,7 @@ import { registerClaude } from "../adapters/claude/src/index.ts";
 test("Claude startup and classic start share one attachment when their hooks overlap", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
-    const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
+    const handle = registerClaude(fake.on, { host: "fixture-host" });
     try {
       await Promise.all([fake.start(), fake.classicStart("startup")]);
       expect(fake.spawns.filter(call => call.argv[1] === "attach")).toHaveLength(1);
@@ -41,7 +41,7 @@ const ensures = (fake: FakeClaude) => fake.runs.filter(call => call.argv[1] === 
 test("a failed first start wakes two waiting classic starts and exactly one of them starts", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
-    const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
+    const handle = registerClaude(fake.on, { host: "fixture-host" });
     try {
       const held = fake.holdRun("ensure");
       const first = fake.start();
@@ -63,7 +63,7 @@ test("a failed first start wakes two waiting classic starts and exactly one of t
 test("two concurrent classic starts after a native ID change add exactly one attachment", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
-    const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
+    const handle = registerClaude(fake.on, { host: "fixture-host" });
     try {
       await fake.start();
       expect(attaches(fake)).toHaveLength(1);
@@ -80,7 +80,7 @@ test("two concurrent classic starts after a native ID change add exactly one att
 test("a waiting classic start reads the native ID after the wait and connects the new ID", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
-    const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
+    const handle = registerClaude(fake.on, { host: "fixture-host" });
     try {
       const held = fake.holdRun("ensure");
       const first = fake.start();
@@ -102,7 +102,7 @@ test("a waiting classic start reads the native ID after the wait and connects th
 test("a classic start during an in-flight startup shares its single attachment", async () => {
   await withRig(async rig => {
     const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
-    const handle = registerClaude(fake.on, { binary: "comms", host: "fixture-host" });
+    const handle = registerClaude(fake.on, { host: "fixture-host" });
     try {
       const held = fake.holdRun("ensure");
       const first = fake.start();
