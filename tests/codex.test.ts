@@ -25,6 +25,27 @@ test("codex: a failed codex queue marks the thread offline and keeps the message
   });
 });
 
+for (const throws of [false, true]) test(`codex: ${throws ? "a throwing queue" : "a refused queue"} records the offline time only once`, async () => {
+  let now = Date.parse("2030-01-01T00:00:00Z");
+  await withRig(async rig => {
+    const sender = await rig.harness("pi"), codex = await rig.harness("codex");
+    const fake = codex.fake as FakeCodex;
+    if (throws) fake.run = async () => { throw new Error("Executable disappeared"); };
+    else fake.exitCode = 1;
+    now += 3_600_000;
+    await sender.send(codex.agent.id, "The receiver is gone");
+    await eventually(() => rig.agent("codex", fake.threadId), agent => {
+      expect(agent.online).toBe(false);
+      expect(agent.last_seen).toBe(new Date(now).toISOString());
+    });
+    const stoppedAt = new Date(now).toISOString();
+    now += 3_600_000;
+    await rig.hook("session-end", fake.sessionEnd());
+    expect((await rig.agent("codex", fake.threadId)).last_seen).toBe(stoppedAt);
+    expect(rig.rows()[0]!.state).not.toBe("acked");
+  }, undefined, { now: () => now });
+});
+
 test("codex: the core runs the Codex executable the SessionStart hook reported", async () => {
   await withRig(async rig => {
     rig.codexExecutable = "/opt/codex/bin/codex";

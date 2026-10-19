@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as files from "node:fs/promises";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,7 +65,7 @@ async function install(root: string) {
   return { exitCode, stdout, stderr };
 }
 
-const versions = () => readdirSync(installs()).filter(entry => entry !== "current").sort();
+const versions = () => readdirSync(installs()).filter(entry => /^\d+\.\d+\.\d+$/.test(entry)).sort();
 const points = () => realpathSync(current());
 
 test("install pi: copies the built Pi package to pi/<version>, with its bin/comms still executable", async () => {
@@ -123,6 +124,44 @@ test("install pi: reinstalling the same version replaces its contents and keeps 
   expect(result.exitCode, result.stderr).toBe(0);
   expect(readFileSync(join(current(), "src", "index.js"), "utf8")).toContain("second 0.1.27");
   expect(versions()).toEqual(["0.1.27"]);
+});
+
+test("install pi: current stays readable at every rename during a same-version reinstall", async () => {
+  const root = dist("0.1.27", "first");
+  expect((await install(root)).exitCode).toBe(0);
+  const original = files.rename, failures: string[] = [];
+  const moves = spyOn(files, "rename").mockImplementation(async (...args) => {
+    await original(...args);
+    try { readFileSync(join(current(), "src", "index.js")); }
+    catch (error) { failures.push((error as Error).message); }
+  });
+  try {
+    const result = await install(dist("0.1.27", "second"));
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(moves).toHaveBeenCalled();
+    expect(failures).toEqual([]);
+    expect(readFileSync(join(current(), "src", "index.js"), "utf8")).toContain("second 0.1.27");
+  } finally { moves.mockRestore(); }
+});
+
+test("install pi: an interrupted replacement preserves current and the next install recovers", async () => {
+  expect((await install(dist("0.1.27", "first"))).exitCode).toBe(0);
+  const source = dist("0.1.27", "second"), original = files.rename;
+  const moves = spyOn(files, "rename").mockImplementation(async (...args) => {
+    await original(...args);
+    if (String(args[0]) === join(installs(), "0.1.27")) throw new Error("Interrupted after moving the old version");
+  });
+  try {
+    const result = await install(source);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("Interrupted");
+    expect(readFileSync(join(current(), "src", "index.js"), "utf8")).toContain("first 0.1.27");
+    expect(existsSync(join(current(), "bin", "comms"))).toBe(true);
+  } finally { moves.mockRestore(); }
+  expect((await install(source)).exitCode).toBe(0);
+  expect(readFileSync(join(current(), "src", "index.js"), "utf8")).toContain("second 0.1.27");
+  expect(versions()).toEqual(["0.1.27"]);
+  expect(readdirSync(installs()).filter(entry => entry.startsWith(".")).every(entry => entry.startsWith(".previous-"))).toBe(true);
 });
 
 test("install pi: installing an older version than those kept still leaves current pointing at an installed copy", async () => {

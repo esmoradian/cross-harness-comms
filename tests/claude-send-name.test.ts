@@ -8,16 +8,16 @@ import { attachToken, claudeAddress, claudeLine, inboxLine, nativeClaude, peerSe
 import { sendRequests, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 
 // Claude draws a SendMessage row from `display` in its own result, and the model never sees it
-// (SEND-NAME-FINDINGS.md). On the native route the adapter names the recipient there and nowhere else.
+// (SEND-NAME-FINDINGS.md). The adapter also replaces the successful model-facing message with a submission receipt.
 
 function sendEvent(to: string, message: string): Extract<ToolEvent, { tool: "SendMessage" }> {
   return { tool: "SendMessage", tool_use_id: uuid(), to, message, summary: "Answer by name" };
 }
 
-// Claude's own result with only `display` naming the recipient.
+// Keep native IDs and metadata, name the UI row, and describe submission without claiming a read state.
 function named(native: ToolResult, address: string, name: string): ToolResult {
   const result = (native as { result: { display: string } }).result;
-  return { result: { ...result, display: result.display.replace(address, name) } };
+  return { result: { ...result, display: result.display.replace(address, name), message: `Submitted to ${name} through comms.` } };
 }
 
 // `agent` asks Claude something natively and returns that message's ID.
@@ -62,9 +62,11 @@ for (const harness of ["pi", "codex"] as Harness[]) {
       const result = await fake.tool(event);
       expect(result).toEqual(named(fake.nativeResult, address, agent.agent.name));
       expect((result as { result: { display: string } }).result.display).toBe(`“Answer by bare name” → ${agent.agent.name}`);
-      // The send still goes to the reply socket, and the model's text still names it.
+      // Native delivery is unchanged; only the model-facing receipt and UI label change.
       expect(fake.nativeCalls.at(-1)).toEqual({ ...event, to: address });
-      expect((fake.nativeResult as { result: { message: string } }).result.message).toContain(address);
+      const message = (result as { result: { message: string } }).result.message;
+      expect(message).toBe(`Submitted to ${agent.agent.name} through comms.`);
+      expect(message).not.toMatch(/read|Claude|uds:/);
       // Nothing went through comms send.
       expect(sendRequests(rig).slice(sends)).toEqual([]);
       const row = await deliverNatively(rig, fake, agent, "Answer by bare name");
@@ -155,6 +157,7 @@ test("a deny, or a result without a string display, comes back from Claude's too
     const results: ToolResult[] = [
       { deny: "The user declined the message" },
       { result: { success: false, message: "Not sent" } },
+      { result: { success: false, message: "Not sent", display: "Denied" } },
       { result: { success: true, message: `“x” → ${address}`, display: { to: address } } },
       { result: "native message accepted" },
       { result: null },
