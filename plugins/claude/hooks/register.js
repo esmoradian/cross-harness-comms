@@ -65,8 +65,11 @@ function splitLines(buffer) {
 }
 
 // adapters/claude/src/index.ts
+function binary($, state) {
+  return state.binary ?? `${$.plugin.root}/bin/comms`;
+}
 function comms($, state, name, params) {
-  return $.process.run([state.binary, ...[name].flat()], params === undefined ? {} : { stdin: JSON.stringify(params) + `
+  return $.process.run([binary($, state), ...[name].flat()], params === undefined ? {} : { stdin: JSON.stringify(params) + `
 ` });
 }
 async function command($, state, name, params) {
@@ -156,13 +159,11 @@ async function startClaude($, state, options) {
     sends.clear();
   }
   const session = { harness: "claude", session_key: state.sessionId, cwd: await $.session.cwd(), host: options.host };
-  if (state.binary === "comms")
-    state.binary = `${$.plugin.root}/bin/comms`;
   const inbox = await $.env.get("CLAUDE_CODE_MESSAGING_SOCKET");
   owned();
   state.nativePeers = !!inbox;
   const claude = inbox ? { inbox, version: (await $.session.version()).version } : undefined;
-  const ensure = await $.process.run([state.binary, "ensure"]);
+  const ensure = await $.process.run([binary($, state), "ensure"]);
   if (ensure.exitCode)
     throw new Error(ensure.stderr || "comms ensure failed");
   owned();
@@ -179,7 +180,7 @@ async function startClaude($, state, options) {
     }
     let initialized = false;
     try {
-      const child = $.process.spawn({ argv: [state.binary, "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...state.token ? { token: state.token } : {}, ...replaces ? { replaces } : {}, ...claude ? { claude } : {} }) + `
+      const child = $.process.spawn({ argv: [binary($, state), "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...state.token ? { token: state.token } : {}, ...replaces ? { replaces } : {}, ...claude ? { claude } : {} }) + `
 ` });
       let buffer = "";
       for await (const chunk of child) {
@@ -440,7 +441,7 @@ function registerClaude(on, options) {
   return { close };
 }
 function register(on) {
-  registerClaude(on, { binary: "comms", host: "localhost" });
+  registerClaude(on, { host: "localhost" });
 }
 export {
   registerClaude,

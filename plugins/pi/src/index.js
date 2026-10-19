@@ -1,5 +1,4 @@
 // adapters/pi/src/index.ts
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // packages/protocol/src/index.ts
@@ -334,7 +333,7 @@ async function runProcess(argv, input) {
     child.stdin.end(input);
   });
 }
-function localRuntime(binary = "comms") {
+function localRuntime(binary) {
   return {
     host: hostname(),
     notice: (text) => process.stderr.write(text + `
@@ -540,8 +539,7 @@ ${message.body}`;
   return { close };
 }
 function extension(pi) {
-  const bundled = fileURLToPath(new URL("../bin/comms", import.meta.url));
-  registerPi(pi, localRuntime(existsSync(bundled) ? bundled : "comms"));
+  registerPi(pi, localRuntime(fileURLToPath(new URL("../bin/comms", import.meta.url))));
 }
 export {
   registerPi,
