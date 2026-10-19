@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createCodexAdapter } from "../adapters/codex/src/index.ts";
 import { FakeCodex } from "./support/fakes/codex.ts";
 import { eventually, uuid } from "./support/helpers.ts";
@@ -98,4 +100,13 @@ test("codex: a thread stays online across a core restart and keeps receiving", a
     await eventually(codex.incoming, messages => expect(messages).toHaveLength(1));
     await rig.state(rig.rows()[0]!.id, "acked");
   });
+});
+
+// Codex starts plugin MCP servers with only PATH and HOME, so the tools would reach another core than the hooks
+// (ROLLOUT-REPORT.md, Step 2); `env_vars` forwards the named variables. The release tree test checks the published copy.
+test("codex: the comms MCP server forwards exactly COMMS_DATA_DIR, COMMS_RELEASE_URL, and CODEX_HOME", () => {
+  const config = JSON.parse(readFileSync(join(import.meta.dir, "..", "adapters", "codex", ".mcp.json"), "utf8"));
+  const envVars = config.mcpServers.comms.env_vars;
+  expect(Array.isArray(envVars)).toBe(true);
+  expect([...envVars].sort()).toEqual(["CODEX_HOME", "COMMS_DATA_DIR", "COMMS_RELEASE_URL"]);
 });
