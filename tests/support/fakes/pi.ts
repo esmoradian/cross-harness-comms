@@ -1,9 +1,12 @@
 import type { Component } from "@earendil-works/pi-tui";
-import type { PiAPI, PiContext, PiMessageRenderer, PiMessageRenderOptions, PiTheme, PiTool, PiToolResult } from "../../../adapters/pi/src/index.ts";
+import type { PiAPI, PiCommandContext, PiContext, PiMessageRenderer, PiMessageRenderOptions, PiTheme, PiTool, PiToolResult } from "../../../adapters/pi/src/index.ts";
 
 export class FakePi implements PiAPI {
   readonly calls: { method: string; args: unknown[] }[] = [];
   readonly tools = new Map<string, PiTool>();
+  // Slash commands by name, and each `ctx.ui.notify` a command handler made.
+  readonly commands = new Map<string, Parameters<PiAPI["registerCommand"]>[1]>();
+  readonly notifications: { message: string; type?: "info" | "warning" | "error" }[] = [];
   // Message renderers by custom type; Pi keeps one per type, so a later registration replaces an earlier one.
   readonly renderers = new Map<string, PiMessageRenderer>();
   readonly incoming: { message: Parameters<PiAPI["sendMessage"]>[0]; options: Parameters<PiAPI["sendMessage"]>[1] }[] = [];
@@ -19,6 +22,20 @@ export class FakePi implements PiAPI {
   registerTool(tool: PiTool) {
     this.calls.push({ method: "registerTool", args: [tool] });
     this.tools.set(tool.name, tool);
+  }
+  registerCommand(name: string, options: Parameters<PiAPI["registerCommand"]>[1]) {
+    this.calls.push({ method: "registerCommand", args: [name, options] });
+    this.commands.set(name, options);
+  }
+  // Runs `/<name> <args>` as Pi does: the handler gets the text after the name and a context whose `ui.notify` is recorded.
+  async command(name: string, args: string): Promise<void> {
+    this.calls.push({ method: "command", args: [name, args] });
+    const command = this.commands.get(name);
+    if (!command) throw new Error(`Pi command not registered: ${name}`);
+    const ctx: PiCommandContext = { ...this.context, ui: { notify: (message, type) => {
+      this.notifications.push({ message, ...(type ? { type } : {}) });
+    } } };
+    await command.handler(args, ctx);
   }
   registerMessageRenderer(customType: string, renderer: PiMessageRenderer) {
     this.calls.push({ method: "registerMessageRenderer", args: [customType, renderer] });

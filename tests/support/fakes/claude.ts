@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:net";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
-import type { ClaudeAPI, ClaudeOn, HookStream, ProcessRunInit, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, PromptInput,
+import type { ClaudeAPI, ClaudeOn, CommandRunInput, CommandRunResult, CommandSpec, ToolSpec, HookStream, ProcessRunInit, ProcessRunResult, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, PromptInput,
   SessionReceiveInput, SessionReceiveOrigin, SessionReceiveResult, SessionVersion, StartEvent, EndEvent, ClassicStartEvent, ToolEvent, ToolResult } from "../../../adapters/claude/src/api.ts";
 import { deferred, Queue } from "../helpers.ts";
 
@@ -8,6 +8,7 @@ type ToolHandler = ($: ClaudeAPI, event: ToolEvent, next: (event: ToolEvent) => 
 type StartHandler = ($: ClaudeAPI, event: StartEvent, next: (event: StartEvent) => Promise<{ cwd: string }>) => Promise<{ cwd: string }>;
 type EndHandler = ($: ClaudeAPI, event: EndEvent, next: (event: EndEvent) => Promise<{ sessionId: string }>) => Promise<{ sessionId: string }>;
 type ClassicStartHandler = ($: ClaudeAPI, event: ClassicStartEvent, next: (event: ClassicStartEvent) => Promise<unknown>) => Promise<unknown>;
+type CommandHandler = ($: ClaudeAPI, event: CommandRunInput, next: (event: CommandRunInput) => Promise<CommandRunResult>) => Promise<CommandRunResult>;
 type ReceiveHandler = ($: ClaudeAPI, event: SessionReceiveInput, next: (event: SessionReceiveInput) => Promise<SessionReceiveResult>) => Promise<SessionReceiveResult>;
 
 // What Claude Code 2.1.289's $.session.version() resolved in a real session on 2026-10-17.
@@ -73,6 +74,9 @@ export class FakeClaude {
   // Each spawned child's `.result`, in the order of `spawns`.
   readonly spawnResults: Promise<ProcessSpawnResult>[] = [];
   readonly nativeCalls: ToolEvent[] = [];
+  // What `$.command.register` and `$.tool.register` declared, in order.
+  readonly registeredCommands: CommandSpec[] = [];
+  readonly registeredTools: ToolSpec[] = [];
   readonly processOutput: { stream: string; text: string; command: string }[] = [];
   readonly completedRuns: { argv: readonly string[]; stdin?: string; result: ProcessRunResult }[] = [];
   // Inbound deliveries the session.receive chain let through, and every chain's answer.
@@ -102,6 +106,7 @@ export class FakeClaude {
   private endHandlers: EndHandler[] = [];
   private classicStartHandlers: ClassicStartHandler[] = [];
   private receiveHandlers: ReceiveHandler[] = [];
+  private commandHandlers: CommandHandler[] = [];
   private attachHold: ReturnType<typeof deferred<void>> | undefined;
   private runHolds = new Map<string, { entered: () => void; gate: Promise<Error | undefined> }>();
   private receiveHolds: { entered: () => void; gate: Promise<void> }[] = [];
@@ -115,13 +120,14 @@ export class FakeClaude {
     options: { env?: Record<string, string>; version?: SessionVersion } = {}) {
     this.env = { ...options.env };
     this.version = options.version ?? CLAUDE_VERSION;
-    this.on = ((name: string, handler: ToolHandler | StartHandler | EndHandler | ClassicStartHandler | ReceiveHandler) => {
+    this.on = ((name: string, handler: ToolHandler | StartHandler | EndHandler | ClassicStartHandler | ReceiveHandler | CommandHandler) => {
       this.calls.push({ method: "on", args: [name, handler] });
       if (name === "tool.call") this.toolHandlers.push(handler as ToolHandler);
       else if (name === "session.start") this.startHandlers.push(handler as StartHandler);
       else if (name === "session.end") this.endHandlers.push(handler as EndHandler);
       else if (name === "classic.SessionStart") this.classicStartHandlers.push(handler as ClassicStartHandler);
       else if (name === "session.receive") this.receiveHandlers.push(handler as ReceiveHandler);
+      else if (name === "command.run") this.commandHandlers.push(handler as CommandHandler);
       else throw new Error(`Unsupported fake hook: ${name}`);
     }) as ClaudeOn;
     this.api = {
@@ -148,6 +154,16 @@ export class FakeClaude {
         cwd: async () => { this.calls.push({ method: "session.cwd", args: [] }); return cwd; },
         version: async () => { this.calls.push({ method: "session.version", args: [] }); return { ...this.version }; },
       },
+      tool: { register: async spec => {
+        this.calls.push({ method: "tool.register", args: [spec] });
+        this.registeredTools.push(spec);
+        return { tool: FakeClaude.toolName(spec.name) };
+      } },
+      command: { register: async spec => {
+        this.calls.push({ method: "command.register", args: [spec] });
+        this.registeredCommands.push(spec);
+        return { command: spec.name };
+      } },
       prompt: { submit: async (input) => {
         this.calls.push({ method: "prompt.submit", args: [input] });
         this.incoming.push(input);
@@ -239,15 +255,32 @@ export class FakeClaude {
     };
     return dispatch(0, event);
   }
+  // The name the model calls a `$.tool.register` tool by.
+  static toolName(name: string): `mcp__cross-harness-comms__${string}` { return `mcp__cross-harness-comms__${name}`; }
   async tool(event: ToolEvent): Promise<ToolResult> {
     this.calls.push({ method: "tool.call", args: [event] });
+    // The model sees only registered plugin tools, and a call no hook answers fails.
+    const plugin = event.tool.startsWith("mcp__");
+    if (plugin && !this.registeredTools.some(spec => FakeClaude.toolName(spec.name) === event.tool)) throw new Error(`Claude tool not registered: ${event.tool}`);
     const dispatch = async (i: number, e: ToolEvent): Promise<ToolResult> => {
       const hook = this.toolHandlers[i];
       if (hook) return hook(this.api, e, next => dispatch(i + 1, next));
+      if (plugin) return { deny: `No hook answered ${e.tool}` };
       this.nativeCalls.push(e);
       return e.tool === "ListAgents" ? { result: { listing: this.nativeListing } } : this.nativeResult;
     };
     return dispatch(0, event);
+  }
+  // Runs `/<command> <args>` typed at the prompt. Only a registered command is offered, and one no hook answers says so.
+  async command(command: string, args = ""): Promise<CommandRunResult> {
+    this.calls.push({ method: "command.run", args: [command, args] });
+    if (!this.registeredCommands.some(spec => spec.name === command)) throw new Error(`Claude command not registered: /${command}`);
+    const input: CommandRunInput = { command, args, origin: { kind: "composer" }, presentation: { isFullscreen: false, columns: 80 } };
+    const dispatch = async (i: number, e: CommandRunInput): Promise<CommandRunResult> => {
+      const hook = this.commandHandlers[i];
+      return hook ? hook(this.api, e, next => dispatch(i + 1, next)) : { text: `No plugin answered /${e.command}.` };
+    };
+    return dispatch(0, input);
   }
   // Native /clear ends the old session, changes its ID, and emits the classic start hook.
   // It does not fire session.start or reload the mod (generated Claude Code types).

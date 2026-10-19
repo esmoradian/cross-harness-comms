@@ -12,6 +12,10 @@ export interface PiContext {
   cwd: string;
   sessionManager: { getSessionId(): string };
 }
+// A command handler's context: Pi's ExtensionCommandContext, of which only `ui.notify` is used.
+export interface PiCommandContext extends PiContext {
+  ui: { notify(message: string, type?: "info" | "warning" | "error"): void };
+}
 export interface PiToolResult {
   content: { type: "text"; text: string }[];
   details: unknown;
@@ -56,6 +60,7 @@ export interface CommsMessageDetails {
 
 export interface PiAPI {
   registerTool(tool: PiTool): void;
+  registerCommand(name: string, options: { description?: string; handler(args: string, ctx: PiCommandContext): Promise<void> }): void;
   registerMessageRenderer(customType: string, renderer: PiMessageRenderer): void;
   on(event: "session_start" | "session_shutdown",
     handler: (event: { type: string; reason?: string }, ctx: PiContext) => void | Promise<void>): void;
