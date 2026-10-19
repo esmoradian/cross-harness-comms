@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { registerPi } from "../adapters/pi/src/index.ts";
 import { FakePi } from "./support/fakes/pi.ts";
 import { eventually, settle, uuid } from "./support/helpers.ts";
@@ -103,15 +104,19 @@ test("pi outbox: an unknown address is blocked with target_not_found, and nothin
 
 test("pi outbox: an ID prefix matching several agents is blocked with target_ambiguous, and nothing is stored", async () => {
   await withRig(async rig => {
-    const first = await rig.harness("pi", uuid(), "/projects/first"), second = await rig.harness("codex", uuid(), "/projects/second");
     const sender = await rig.harness("pi", uuid(), "/projects/sender");
-    // UUIDv7 IDs made within about a minute share their first 8 characters, which the ID-prefix rule needs.
-    let prefix = "";
-    while (first.agent.id[prefix.length] === second.agent.id[prefix.length]) prefix += first.agent.id[prefix.length];
-    expect(prefix.length).toBeGreaterThanOrEqual(8);
-    const { result } = await outbox(pi(sender), { to: `comms:${prefix}`, message: "Which one?" });
+    // Two agents whose chosen IDs share the prefix `00000000`, which no minted UUIDv7 has, written the way the tests read the database.
+    const db = new Database(rig.databasePath);
+    try {
+      for (const suffix of ["1", "2"]) db.query(`INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash, name_chosen)
+        VALUES (?, 'pi', ?, 'fixture-host', ?, '/projects/twins', ?, NULL, 0)`)
+        .run(`00000000-0000-7000-8000-00000000000${suffix}`, uuid(), `pi-twin-${suffix}`, new Date().toISOString());
+    } finally { db.close(); }
+    const { result } = await outbox(pi(sender), { to: "comms:00000000", message: "Which one?" });
     expect(result).toMatchObject({ version: 1, status: "blocked", code: "target_ambiguous", ...EXTENSION });
-    expect(rig.rows()).toEqual([]);
+    // Each twin's own ID still reaches it, so the agents are visible to the core.
+    expect((await outbox(pi(sender), { to: "00000000-0000-7000-8000-000000000001", message: "Just one" })).result.status).toBe("sent");
+    expect(rig.rows().map(row => [row.recipient, row.body])).toEqual([["00000000-0000-7000-8000-000000000001", "Just one"]]);
   });
 });
 
