@@ -1,0 +1,17 @@
+{
+  "name": "comms",
+  "owner": {
+    "name": "esmoradian"
+  },
+  "plugins": [
+    {
+      "name": "cross-harness-comms",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/esmoradian/cross-harness-comms.git",
+        "path": "plugins/claude",
+        "ref": "release"
+      }
+    }
+  ]
+}
