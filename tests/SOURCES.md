@@ -214,22 +214,22 @@ The fake emits those events and changes its host session ID; registration, disco
 - The tests in `claude-generation.test.ts` hold `detach`, `send`, `ensure`, `prompt.submit` (through `acceptGate`), and `session.receive`'s `next`, and fire a scheduled attach retry with `runScheduled()`, so every interleaving is set by a hold or the fake clock, not by timing.
   A retry is scheduled by destroying the attachment's in-memory link and awaiting that child's `spawnResults` entry.
 
-## Aliases (HANDOFF-ALIASES)
+## Names (HANDOFF-NAMES)
 
-Sources: the decisions in `internal/HANDOFF-ALIASES.md` and `internal/ALIASING-DESIGN.md`; for Claude, the generated Claude Code 2.1.296 mod types that the `plugin-authoring` skill writes as `types/claude-code.d.ts` in its bundled skill folder (`$.tool.register`, `ToolSpec`, `$.command.register`, `CommandSpec`, `command.run`, `CommandRunInput`, `CommandRunResult`, `McpToolCallInputFallback`) and its `reference.md` and `examples/pane.tsx`; for Pi, the installed 0.85.1 `docs/extensions.md` (`pi.registerCommand`, session switch events) and `dist/core/extensions/types.d.ts` (`RegisteredCommand`, `ExtensionCommandContext`, `ExtensionUIContext.notify`), and Pi Intercom 0.13.0's `/alias` in `index.ts` (`registerCommand("alias")`, `setIntercomAlias`, which answers with `ctx.ui.notify`).
-These are specified in `aliases.test.ts`.
+Sources: the decisions in `internal/HANDOFF-NAMES.md` and `internal/NAMING-DESIGN.md`; for Claude, the generated Claude Code 2.1.296 mod types that the `plugin-authoring` skill writes as `types/claude-code.d.ts` in its bundled skill folder (`$.tool.register`, `ToolSpec`, `$.command.register`, `CommandSpec`, `command.run`, `CommandRunInput`, `CommandRunResult`, `McpToolCallInputFallback`) and its `reference.md` and `examples/pane.tsx`; for Pi, the installed 0.85.1 `docs/extensions.md` (`pi.registerCommand`, session switch events) and `dist/core/extensions/types.d.ts` (`RegisteredCommand`, `ExtensionCommandContext`, `ExtensionUIContext.notify`), and Pi Intercom 0.13.0's `/alias` in `index.ts` (`registerCommand("alias")`, `setIntercomAlias`, which answers with `ctx.ui.notify`).
+These are specified in `names.test.ts`.
 
 - Claude: `$.command.register({ name, description, argumentHint?, immediate? })` declares `/<name>` and resolves `{ command }`; a `command.run` hook on that command answers `{ text }` without calling `next`, and a run no hook answers says so as its output.
   `FakeClaude.command(name, args)` runs the `command.run` chain with `{ command, args, origin, presentation }`; it throws for a command never registered, since the typeahead offers only registered ones.
 - Claude: `$.tool.register({ name, description, inputSchema?, isDeferred? })` declares a tool the model calls as `mcp__<plugin>__<name>` and resolves `{ tool }` with that full name; a `tool.call` hook on that name answers, with the input fields flat beside `tool` as for every tool, and a call no hook answers fails.
-  `FakeClaude.tool` throws for an `mcp__` tool never registered and answers `{ deny }` when no hook answers one; the plugin name is `cross-harness-comms`, so the alias tool is `mcp__cross-harness-comms__comms_alias` (`FakeClaude.toolName`).
+  `FakeClaude.tool` throws for an `mcp__` tool never registered and answers `{ deny }` when no hook answers one; the plugin name is `cross-harness-comms`, so the name tool is `mcp__cross-harness-comms__comms_name` (`FakeClaude.toolName`).
   Both are declared in `session.start`, which the generated types say a `$.tool.register` awaited there is listed by turn one; `/clear` fires no `session.start`, and the fake keeps registrations across it.
   These methods are in the 2.1.296 generated types; whether 2.1.289 had them was not checked.
 - Pi: `pi.registerCommand(name, { description?, handler(args, ctx) })` registers `/<name>`; the handler gets the text after the name and an `ExtensionCommandContext`, of which the structural subset declares only `ui.notify(message, type?)`.
   `FakePi.command(name, args)` runs the handler and records each notification in `notifications`.
 - Pi reloads and rebinds extensions for a new session (`session_shutdown`, then `session_start` with reason `new`), so a new Pi session is a new extension instance; the test starts a new `FakePi` for it.
-- The `alias` refusal for an online holder is `NAME_TAKEN` with a message containing the holder's harness and the last part of its working directory; the exact wording is left to the implementation.
-- The migration test drops `agents.aliased` from a current database to stand in for one from before aliases, so the column must stay droppable (not part of an index, key, or check constraint).
+- The `name` refusal for an online holder is `NAME_TAKEN` with a message containing the holder's harness and the last part of its working directory; the exact wording is left to the implementation.
+- The migration test drops `agents.name_chosen` from a current database to stand in for one from before chosen names, so the column must stay droppable (not part of an index, key, or check constraint).
 
 ## Detach
 
@@ -239,7 +239,7 @@ Detaching another connection must end the owner while leaving the caller usable,
 
 ## Narrow choices for the first specification
 
-- Pi and Codex tool names are `comms_send`, `comms_list`, and `comms_alias`.
+- Pi and Codex tool names are `comms_send`, `comms_list`, and `comms_name`.
 - Claude sends native `message` text literally, including `comms-reply:` prefixes.
   The adapter selects the most recent received message from that exact address that has not yet been replied to.
   A successful reply consumes that pending message once; older pending messages remain eligible, and state is separate per receiving session.

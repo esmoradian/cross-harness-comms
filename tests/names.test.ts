@@ -9,19 +9,19 @@ import { attachToken } from "./support/claude.ts";
 import { eventually, uuid, type Peer } from "./support/helpers.ts";
 import { cli, helloRequests, registration, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 
-// ALIASING-DESIGN.md and HANDOFF-ALIASES.md: an alias is the agent's one comms name, chosen from inside its session.
-// `alias { token? | codex_thread?, name }` renames the caller and marks it chosen (`agents.aliased`). An online holder
+// NAMING-DESIGN.md and HANDOFF-NAMES.md: a chosen name is the agent's one comms name, set from inside its session.
+// `name { token? | codex_thread?, name }` renames the caller and marks it chosen (`agents.name_chosen`). An online holder
 // refuses with NAME_TAKEN naming its harness and folder; an offline holder falls back to a generated name, the way
 // registration picks one, and keeps its mail. A Claude /clear hello names the identity it replaces (`replaces`, that
-// identity's token); an aliased, offline identity on the same harness and host hands its alias to the new identity.
+// identity's token); an offline identity with a chosen name, on the same harness and host, hands that name to the new identity.
 // Mail never moves with a name.
 
-const ALIAS_TOOL = FakeClaude.toolName("comms_alias");
+const NAME_TOOL = FakeClaude.toolName("comms_name");
 
-// The `aliased` flag as stored; tests read the database the way the token tests do.
-function aliased(rig: Rig, id: string): number | undefined {
+// The `name_chosen` flag as stored; tests read the database the way the token tests do.
+function nameChosen(rig: Rig, id: string): number | undefined {
   const db = new Database(rig.databasePath, { readonly: true });
-  try { return (db.query("SELECT aliased FROM agents WHERE id = ?").get(id) as { aliased: number } | null)?.aliased; }
+  try { return (db.query("SELECT name_chosen FROM agents WHERE id = ?").get(id) as { name_chosen: number } | null)?.name_chosen; }
   finally { db.close(); }
 }
 
@@ -55,21 +55,21 @@ function takenBy(error: unknown, harness: Harness, folder: string) {
 const bodies = (peer: Peer) => peer.received.flatMap(packet => "method" in packet && packet.method === "deliver"
   ? [(packet.params as { message: { body: string } }).message.body] : []);
 
-test("aliases: COMMS_TOOLS gives Pi and Codex comms_alias with a required name, beside comms_send and comms_list", () => {
-  expect(COMMS_TOOLS.map(tool => tool.name as string)).toEqual(["comms_send", "comms_list", "comms_alias"]);
-  const alias = COMMS_TOOLS.find(tool => tool.name === ("comms_alias" as string))!;
-  expect(alias.inputSchema).toMatchObject({ type: "object", properties: { name: { type: "string" } }, required: ["name"] });
+test("names: COMMS_TOOLS gives Pi and Codex comms_name with a required name, beside comms_send and comms_list", () => {
+  expect(COMMS_TOOLS.map(tool => tool.name as string)).toEqual(["comms_send", "comms_list", "comms_name"]);
+  const nameTool = COMMS_TOOLS.find(tool => tool.name === ("comms_name" as string))!;
+  expect(nameTool.inputSchema).toMatchObject({ type: "object", properties: { name: { type: "string" } }, required: ["name"] });
 });
 
-test("aliases: an agent takes an unheld name, is marked aliased, and sends and lookups by that name reach it", async () => {
+test("names: an agent takes an unheld name, is marked as chosen, and sends and lookups by that name reach it", async () => {
   await withRig(async rig => {
     const target = await join(rig, "pi"), sender = await join(rig, "codex");
     expect(target.agent.name).toBe("pi-shared");
-    expect(aliased(rig, target.agent.id)).toBe(0);
-    const result = await target.peer.request("alias", { token: target.token, name: "planner" });
+    expect(nameChosen(rig, target.agent.id)).toBe(0);
+    const result = await target.peer.request("name", { token: target.token, name: "planner" });
     expect(result).toMatchObject({ id: target.agent.id, name: "planner" });
     expect(await named(rig, target.agent.id)).toMatchObject({ name: "planner", online: true });
-    expect(aliased(rig, target.agent.id)).toBe(1);
+    expect(nameChosen(rig, target.agent.id)).toBe(1);
     expect((await sender.peer.request("resolve", { name: "planner" })).agent).toMatchObject({ id: target.agent.id });
     expect((await sender.peer.request("resolve", { name: "pi-shared" })).agent).toBeNull();
     await sender.peer.request("send", { token: sender.token, id: uuid(), to: "comms:planner", body: "For the planner" });
@@ -77,49 +77,49 @@ test("aliases: an agent takes an unheld name, is marked aliased, and sends and l
   });
 });
 
-test("aliases: a name outside the name rule is refused with INVALID_NAME and the name stays", async () => {
+test("names: a name outside the name rule is refused with INVALID_NAME and the name stays", async () => {
   await withRig(async rig => {
     const caller = await join(rig, "pi");
     for (const name of ["Planner", "has space", "x".repeat(65), "0190abcd-1234-7000"]) {
-      await expect(caller.peer.request("alias", { token: caller.token, name })).rejects.toMatchObject({ data: { code: "INVALID_NAME" } });
+      await expect(caller.peer.request("name", { token: caller.token, name })).rejects.toMatchObject({ data: { code: "INVALID_NAME" } });
     }
-    await expect(caller.peer.request("alias", { name: "planner" })).rejects.toMatchObject({ data: { code: "INVALID_TOKEN" } });
+    await expect(caller.peer.request("name", { name: "planner" })).rejects.toMatchObject({ data: { code: "INVALID_TOKEN" } });
     expect((await named(rig, caller.agent.id)).name).toBe("pi-shared");
-    expect(aliased(rig, caller.agent.id)).toBe(0);
+    expect(nameChosen(rig, caller.agent.id)).toBe(0);
   });
 });
 
-test("aliases: a name an online agent holds is refused with NAME_TAKEN naming that agent's harness and folder", async () => {
+test("names: a name an online agent holds is refused with NAME_TAKEN naming that agent's harness and folder", async () => {
   await withRig(async rig => {
     const claude = await join(rig, "claude", "/projects/api-service");
-    await claude.peer.request("alias", { token: claude.token, name: "planner" });
+    await claude.peer.request("name", { token: claude.token, name: "planner" });
     const codex = await rig.harness("codex", undefined, "/projects/codex-work");
     expect((await cli(rig, ["rename", `comms:${codex.agent.name}`, "reviewer"])).exitCode).toBe(0);
     const caller = await join(rig, "pi");
-    takenBy(await caller.peer.request("alias", { token: caller.token, name: "planner" }).catch(error => error), "claude", "api-service");
+    takenBy(await caller.peer.request("name", { token: caller.token, name: "planner" }).catch(error => error), "claude", "api-service");
     // An online Codex thread counts as online through its hooks, not a connection.
-    takenBy(await caller.peer.request("alias", { token: caller.token, name: "reviewer" }).catch(error => error), "codex", "codex-work");
+    takenBy(await caller.peer.request("name", { token: caller.token, name: "reviewer" }).catch(error => error), "codex", "codex-work");
     expect((await named(rig, claude.agent.id)).name).toBe("planner");
     expect((await named(rig, codex.agent.id)).name).toBe("reviewer");
     expect((await named(rig, caller.agent.id)).name).toBe("pi-shared");
-    expect(aliased(rig, caller.agent.id)).toBe(0);
+    expect(nameChosen(rig, caller.agent.id)).toBe(0);
   });
 });
 
-test("aliases: taking a name from an offline holder gives the holder a generated name, and its queued mail stays with it, never reaching the new holder", async () => {
+test("names: taking a name from an offline holder gives the holder a generated name, and its queued mail stays with it, never reaching the new holder", async () => {
   await withRig(async rig => {
     const holder = await join(rig, "pi", "/projects/old"), sender = await join(rig, "codex");
-    await holder.peer.request("alias", { token: holder.token, name: "planner" });
+    await holder.peer.request("name", { token: holder.token, name: "planner" });
     await leave(rig, holder);
     await sender.peer.request("send", { token: sender.token, id: uuid(), to: "comms:planner", body: "For the old planner" });
     const queued = rig.rows()[0]!;
     expect(queued).toMatchObject({ recipient: holder.agent.id, state: "queued" });
 
     const caller = await join(rig, "claude", "/projects/new");
-    expect(await caller.peer.request("alias", { token: caller.token, name: "planner" })).toMatchObject({ id: caller.agent.id, name: "planner" });
+    expect(await caller.peer.request("name", { token: caller.token, name: "planner" })).toMatchObject({ id: caller.agent.id, name: "planner" });
     expect(await named(rig, holder.agent.id)).toMatchObject({ name: "pi-old", online: false });
-    expect(aliased(rig, holder.agent.id)).toBe(0);
-    expect(aliased(rig, caller.agent.id)).toBe(1);
+    expect(nameChosen(rig, holder.agent.id)).toBe(0);
+    expect(nameChosen(rig, caller.agent.id)).toBe(1);
     expect(rig.rows()).toMatchObject([{ id: queued.id, recipient: holder.agent.id, state: "queued" }]);
 
     await sender.peer.request("send", { token: sender.token, id: uuid(), to: "comms:planner", body: "For the new planner" });
@@ -137,23 +137,23 @@ test("aliases: taking a name from an offline holder gives the holder a generated
   });
 });
 
-test("aliases: an offline holder falls back to the first free generated name, as registration picks one", async () => {
+test("names: an offline holder falls back to the first free generated name, as registration picks one", async () => {
   await withRig(async rig => {
     const first = await join(rig, "pi"), second = await join(rig, "pi");
     expect([first.agent.name, second.agent.name]).toEqual(["pi-shared", "pi-shared-2"]);
-    await second.peer.request("alias", { token: second.token, name: "planner" });
+    await second.peer.request("name", { token: second.token, name: "planner" });
     await leave(rig, second);
     const caller = await join(rig, "codex");
-    await caller.peer.request("alias", { token: caller.token, name: "planner" });
+    await caller.peer.request("name", { token: caller.token, name: "planner" });
     expect((await named(rig, second.agent.id)).name).toBe("pi-shared-2");
     expect((await named(rig, first.agent.id)).name).toBe("pi-shared");
   });
 });
 
-test("aliases: a Claude hello replacing an aliased, offline Claude identity on the same host moves the alias to the new identity, and no mail moves", async () => {
+test("names: a Claude hello replacing an offline Claude identity with a chosen name on the same host moves the name to the new identity, and no mail moves", async () => {
   await withRig(async rig => {
     const before = await join(rig, "claude"), sender = await join(rig, "pi", "/projects/sender");
-    await before.peer.request("alias", { token: before.token, name: "planner" });
+    await before.peer.request("name", { token: before.token, name: "planner" });
     await leave(rig, before);
     await sender.peer.request("send", { token: sender.token, id: uuid(), to: "comms:planner", body: "Before the clear" });
     const queued = rig.rows()[0]!;
@@ -163,8 +163,8 @@ test("aliases: a Claude hello replacing an aliased, offline Claude identity on t
     expect(hello.agent).toMatchObject({ name: "planner" });
     expect(hello.agent!.id).not.toBe(before.agent.id);
     expect((await named(rig, before.agent.id)).name).toMatch(/^claude-shared(-\d+)?$/);
-    expect(aliased(rig, hello.agent!.id)).toBe(1);
-    expect(aliased(rig, before.agent.id)).toBe(0);
+    expect(nameChosen(rig, hello.agent!.id)).toBe(1);
+    expect(nameChosen(rig, before.agent.id)).toBe(0);
     expect(rig.rows()).toMatchObject([{ id: queued.id, recipient: before.agent.id, state: "queued" }]);
 
     await sender.peer.request("send", { token: sender.token, id: uuid(), to: "comms:planner", body: "After the clear" });
@@ -173,13 +173,13 @@ test("aliases: a Claude hello replacing an aliased, offline Claude identity on t
   });
 });
 
-test("aliases: nothing moves when the replaced identity is unaliased, online, on another harness or host, unknown, or the hello resumes an existing identity", async () => {
+test("names: nothing moves when the replaced identity has a generated name, is online, on another harness or host, unknown, or the hello resumes an existing identity", async () => {
   await withRig(async rig => {
     const hello = async (replaces: string, session = registration("claude")) => {
       const peer = await rig.peer();
       return (await peer.request("hello", { versions: VERSION_RANGE, session, replaces })).agent!;
     };
-    // Unaliased: its generated name stays, and the new identity gets its own.
+    // Generated name: it stays, and the new identity gets its own.
     const plain = await join(rig, "claude", "/projects/plain");
     await leave(rig, plain);
     expect((await hello(plain.token, registration("claude", uuid(), "/projects/plain"))).name).toBe("claude-plain-2");
@@ -193,19 +193,19 @@ test("aliases: nothing moves when the replaced identity is unaliased, online, on
     for (const [label, start] of cases) {
       const { holder, offline } = await start();
       const name = `held-${label.replace(/ /g, "-")}`;
-      await holder.peer.request("alias", { token: holder.token, name });
+      await holder.peer.request("name", { token: holder.token, name });
       if (offline) await leave(rig, holder);
       const fresh = await hello(holder.token);
       expect(fresh.name, label).not.toBe(name);
       expect((await named(rig, holder.agent.id)).name, label).toBe(name);
-      expect(aliased(rig, holder.agent.id), label).toBe(1);
+      expect(nameChosen(rig, holder.agent.id), label).toBe(1);
     }
 
     expect((await hello("not-a-token")).name).toMatch(/^claude-shared/);
 
-    // A resumed identity keeps its own name; only a newly created identity takes the alias.
+    // A resumed identity keeps its own name; only a newly created identity takes the chosen name.
     const holder = await join(rig, "claude");
-    await holder.peer.request("alias", { token: holder.token, name: "kept" });
+    await holder.peer.request("name", { token: holder.token, name: "kept" });
     await leave(rig, holder);
     const existing = await join(rig, "claude", "/projects/existing");
     await leave(rig, existing);
@@ -215,21 +215,21 @@ test("aliases: nothing moves when the replaced identity is unaliased, online, on
   });
 });
 
-test("aliases: the migration adds aliased with every existing agent unaliased, so a Claude /clear leaves their names", async () => {
+test("names: the migration adds name_chosen with every existing name unchosen, so a Claude /clear leaves their names", async () => {
   await withRig(async rig => {
     const before = await join(rig, "claude");
-    await before.peer.request("alias", { token: before.token, name: "planner" });
+    await before.peer.request("name", { token: before.token, name: "planner" });
     const other = await join(rig, "pi");
     await rig.restart(() => {
-      // A database from before aliases: the same agents and names, no aliased column.
+      // A database from before chosen names: the same agents and names, no name_chosen column.
       const db = new Database(rig.databasePath);
-      try { db.exec("ALTER TABLE agents DROP COLUMN aliased"); }
+      try { db.exec("ALTER TABLE agents DROP COLUMN name_chosen"); }
       finally { db.close(); }
     });
     const db = new Database(rig.databasePath, { readonly: true });
-    try { expect((db.query("PRAGMA table_info(agents)").all() as { name: string }[]).map(column => column.name)).toContain("aliased"); }
+    try { expect((db.query("PRAGMA table_info(agents)").all() as { name: string }[]).map(column => column.name)).toContain("name_chosen"); }
     finally { db.close(); }
-    expect([aliased(rig, before.agent.id), aliased(rig, other.agent.id)]).toEqual([0, 0]);
+    expect([nameChosen(rig, before.agent.id), nameChosen(rig, other.agent.id)]).toEqual([0, 0]);
     const after = await rig.peer();
     const hello = await after.request("hello", { versions: VERSION_RANGE, session: registration("claude"), replaces: before.token });
     expect(hello.agent!.name).not.toBe("planner");
@@ -237,75 +237,75 @@ test("aliases: the migration adds aliased with every existing agent unaliased, s
   });
 });
 
-test("aliases: comms alias <name> reads the session token on stdin", async () => {
+test("names: comms name <name> reads the session token on stdin", async () => {
   await withRig(async rig => {
     const caller = await join(rig, "pi"), holder = await join(rig, "claude", "/projects/api-service");
-    await holder.peer.request("alias", { token: holder.token, name: "reviewer" });
-    const result = await cli(rig, ["alias", "planner"], { token: caller.token });
+    await holder.peer.request("name", { token: holder.token, name: "reviewer" });
+    const result = await cli(rig, ["name", "planner"], { token: caller.token });
     expect(result.exitCode, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ id: caller.agent.id, name: "planner" });
     expect(result.stdout).not.toContain(caller.token);
-    const taken = await cli(rig, ["alias", "reviewer"], { token: caller.token });
+    const taken = await cli(rig, ["name", "reviewer"], { token: caller.token });
     expect(taken.exitCode).toBe(2);
     expect(taken.stderr).toContain("claude");
     expect(taken.stderr).toContain("api-service");
-    expect((await cli(rig, ["alias"], { token: caller.token })).exitCode).toBe(1);
+    expect((await cli(rig, ["name"], { token: caller.token })).exitCode).toBe(1);
   });
 });
 
-// Claude: a `/comms-alias <name>` slash command and a model-callable `comms_alias` tool, both declared at session start.
+// Claude: a `/comms-name <name>` slash command and a model-callable `comms_name` tool, both declared at session start.
 
-async function claudeAlias(fake: FakeClaude, name: string) {
-  return fake.tool({ tool: ALIAS_TOOL, tool_use_id: uuid(), name });
+async function claudeName(fake: FakeClaude, name: string) {
+  return fake.tool({ tool: NAME_TOOL, tool_use_id: uuid(), name });
 }
 
-test("aliases: Claude declares /comms-alias and a comms_alias tool at session start", async () => {
+test("names: Claude declares /comms-name and a comms_name tool at session start", async () => {
   await withRig(async rig => {
     const fake = (await rig.harness("claude")).fake as FakeClaude;
-    expect(fake.registeredCommands).toEqual([expect.objectContaining({ name: "comms-alias" })]);
-    expect(fake.registeredTools).toEqual([expect.objectContaining({ name: "comms_alias",
+    expect(fake.registeredCommands).toEqual([expect.objectContaining({ name: "comms-name" })]);
+    expect(fake.registeredTools).toEqual([expect.objectContaining({ name: "comms_name",
       inputSchema: expect.objectContaining({ properties: { name: expect.objectContaining({ type: "string" }) }, required: ["name"] }) })]);
   });
 });
 
-test("aliases: Claude's /comms-alias sets the session's alias and answers with its address, or the refusal", async () => {
+test("names: Claude's /comms-name sets the session's name and answers with its address, or the refusal", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude");
     const fake = claude.fake as FakeClaude;
-    expect((await fake.command("comms-alias", "planner")).text).toContain("comms:planner");
+    expect((await fake.command("comms-name", "planner")).text).toContain("comms:planner");
     expect(await named(rig, claude.agent.id)).toMatchObject({ name: "planner", online: true });
-    expect(aliased(rig, claude.agent.id)).toBe(1);
+    expect(nameChosen(rig, claude.agent.id)).toBe(1);
     const holder = await rig.harness("pi", undefined, "/projects/review-desk");
     expect((await cli(rig, ["rename", `comms:${holder.agent.name}`, "reviewer"])).exitCode).toBe(0);
-    const refused = (await fake.command("comms-alias", "reviewer")).text ?? "";
+    const refused = (await fake.command("comms-name", "reviewer")).text ?? "";
     expect(refused).toContain("pi");
     expect(refused).toContain("review-desk");
     expect((await named(rig, claude.agent.id)).name).toBe("planner");
   });
 });
 
-test("aliases: Claude's model sets its alias with comms_alias, and a refusal is denied with the reason", async () => {
+test("names: Claude's model sets its name with comms_name, and a refusal is denied with the reason", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude");
     const fake = claude.fake as FakeClaude;
-    const result = await claudeAlias(fake, "planner");
+    const result = await claudeName(fake, "planner");
     expect(result).not.toHaveProperty("deny");
     expect(JSON.stringify("result" in result ? result.result : null)).toContain("comms:planner");
     expect((await named(rig, claude.agent.id)).name).toBe("planner");
     const holder = await rig.harness("pi", undefined, "/projects/review-desk");
     expect((await cli(rig, ["rename", `comms:${holder.agent.name}`, "reviewer"])).exitCode).toBe(0);
-    const refused = await claudeAlias(fake, "reviewer");
+    const refused = await claudeName(fake, "reviewer");
     expect(refused).toHaveProperty("deny");
     expect("deny" in refused && refused.deny).toContain("review-desk");
     expect(fake.nativeCalls).toEqual([]);
   });
 });
 
-test("aliases: Claude /clear moves the alias to the new identity, its hello names the replaced one, and the old identity keeps its mail", async () => {
+test("names: Claude /clear moves the chosen name to the new identity, its hello names the replaced one, and the old identity keeps its mail", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), pi = await rig.harness("pi");
     const fake = claude.fake as FakeClaude;
-    await claudeAlias(fake, "planner");
+    await claudeName(fake, "planner");
     const oldToken = attachToken(fake), nextId = uuid();
     await fake.clear(nextId);
     const hello = helloRequests(rig, "claude", nextId)[0]!.packet as { params: { replaces?: string; token?: string } };
@@ -323,12 +323,12 @@ test("aliases: Claude /clear moves the alias to the new identity, its hello name
     await pi.send(`comms:${claude.agent.id}`, "For the cleared identity");
     expect(rig.rows().at(-1)).toMatchObject({ recipient: claude.agent.id, state: "queued" });
     expect(claude.incoming()).toHaveLength(1);
-    // The alias still answers from the replacement session.
-    expect(JSON.stringify(await claudeAlias(fake, "planner"))).toContain("comms:planner");
+    // The chosen name still answers from the replacement session.
+    expect(JSON.stringify(await claudeName(fake, "planner"))).toContain("comms:planner");
   });
 });
 
-test("aliases: Claude /clear leaves an unaliased identity's generated name alone", async () => {
+test("names: Claude /clear leaves a generated name alone", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude");
     const fake = claude.fake as FakeClaude;
@@ -339,31 +339,31 @@ test("aliases: Claude /clear leaves an unaliased identity's generated name alone
   });
 });
 
-test("aliases: Claude resume of the same session keeps its identity and alias", async () => {
+test("names: Claude resume of the same session keeps its identity and chosen name", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude");
     const fake = claude.fake as FakeClaude;
-    await fake.command("comms-alias", "planner");
+    await fake.command("comms-name", "planner");
     await fake.end("resume");
     await fake.classicStart("resume");
     await eventually(() => rig.agent("claude", fake.sessionId), agent => expect(agent.online).toBe(true));
     expect(await rig.agent("claude", fake.sessionId)).toMatchObject({ id: claude.agent.id, name: "planner" });
-    expect(aliased(rig, claude.agent.id)).toBe(1);
+    expect(nameChosen(rig, claude.agent.id)).toBe(1);
   });
 });
 
-// Pi: the shared comms_alias tool and a /comms-alias command (Pi Intercom owns /alias).
+// Pi: the shared comms_name tool and a /comms-name command (Pi Intercom owns /alias).
 
-test("aliases: Pi's comms_alias tool sets the session's alias and answers with its address; a held name throws the refusal", async () => {
+test("names: Pi's comms_name tool sets the session's name and answers with its address; a held name throws the refusal", async () => {
   await withRig(async rig => {
     const pi = await rig.harness("pi");
     const fake = pi.fake as FakePi;
-    const result = await fake.tool("comms_alias", { name: "planner" });
+    const result = await fake.tool("comms_name", { name: "planner" });
     expect(result.content[0]!.text).toContain("comms:planner");
     expect((await named(rig, pi.agent.id)).name).toBe("planner");
     const holder = await join(rig, "claude", "/projects/api-service");
-    await holder.peer.request("alias", { token: holder.token, name: "reviewer" });
-    const error = await fake.tool("comms_alias", { name: "reviewer" }).catch(caught => caught as Error);
+    await holder.peer.request("name", { token: holder.token, name: "reviewer" });
+    const error = await fake.tool("comms_name", { name: "reviewer" }).catch(caught => caught as Error);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("claude");
     expect((error as Error).message).toContain("api-service");
@@ -371,76 +371,76 @@ test("aliases: Pi's comms_alias tool sets the session's alias and answers with i
   });
 });
 
-test("aliases: Pi's /comms-alias command sets the alias and notifies its address, and a refusal notifies an error", async () => {
+test("names: Pi's /comms-name command sets the name and notifies its address, and a refusal notifies an error", async () => {
   await withRig(async rig => {
     const pi = await rig.harness("pi");
     const fake = pi.fake as FakePi;
     expect(fake.commands.has("alias")).toBe(false);
-    await fake.command("comms-alias", "planner");
+    await fake.command("comms-name", "planner");
     expect(fake.notifications).toEqual([expect.objectContaining({ message: expect.stringContaining("comms:planner") })]);
     expect(fake.notifications[0]!.type).not.toBe("error");
     expect((await named(rig, pi.agent.id)).name).toBe("planner");
     const holder = await join(rig, "claude", "/projects/api-service");
-    await holder.peer.request("alias", { token: holder.token, name: "reviewer" });
-    await fake.command("comms-alias", "reviewer");
+    await holder.peer.request("name", { token: holder.token, name: "reviewer" });
+    await fake.command("comms-name", "reviewer");
     expect(fake.notifications[1]).toMatchObject({ type: "error", message: expect.stringContaining("api-service") });
   });
 });
 
-test("aliases: a new Pi session in the same folder starts unaliased with a generated name", async () => {
+test("names: a new Pi session in the same folder starts with a generated name", async () => {
   await withRig(async rig => {
     const first = await rig.harness("pi");
-    await (first.fake as FakePi).tool("comms_alias", { name: "planner" });
+    await (first.fake as FakePi).tool("comms_name", { name: "planner" });
     await first.close();
     const next = await rig.harness("pi");
     expect(next.agent.id).not.toBe(first.agent.id);
     expect(next.agent.name).toBe("pi-shared");
-    expect(aliased(rig, next.agent.id)).toBe(0);
+    expect(nameChosen(rig, next.agent.id)).toBe(0);
     expect(await named(rig, first.agent.id)).toMatchObject({ name: "planner", online: false });
   });
 });
 
-// Codex: the shared comms_alias tool through the MCP server, acting as the thread its `_meta` names.
+// Codex: the shared comms_name tool through the MCP server, acting as the thread its `_meta` names.
 
-async function codexAlias(rig: Rig, session: HarnessSession, name: string) {
+async function codexName(rig: Rig, session: HarnessSession, name: string) {
   const adapter = createCodexAdapter(rig.runtime());
-  try { return await adapter.toolsCall((session.fake as FakeCodex).request("comms_alias", { name })); }
+  try { return await adapter.toolsCall((session.fake as FakeCodex).request("comms_name", { name })); }
   finally { await adapter.close(); }
 }
 
-test("aliases: Codex's comms_alias tool sets the thread's alias and answers with its address; a held name is an error result", async () => {
+test("names: Codex's comms_name tool sets the thread's name and answers with its address; a held name is an error result", async () => {
   await withRig(async rig => {
     const codex = await rig.harness("codex");
-    const result = await codexAlias(rig, codex, "planner");
+    const result = await codexName(rig, codex, "planner");
     expect(result.isError).toBeFalsy();
     expect(result.content.map(item => item.text).join("\n")).toContain("comms:planner");
     expect((await named(rig, codex.agent.id)).name).toBe("planner");
-    expect(aliased(rig, codex.agent.id)).toBe(1);
+    expect(nameChosen(rig, codex.agent.id)).toBe(1);
     const holder = await join(rig, "pi", "/projects/review-desk");
-    await holder.peer.request("alias", { token: holder.token, name: "reviewer" });
-    const refused = await codexAlias(rig, codex, "reviewer");
+    await holder.peer.request("name", { token: holder.token, name: "reviewer" });
+    const refused = await codexName(rig, codex, "reviewer");
     expect(refused.isError).toBe(true);
     expect(refused.content[0]!.text).toContain("pi");
     expect(refused.content[0]!.text).toContain("review-desk");
   });
 });
 
-test("aliases: a new Codex thread in the same folder starts unaliased with a generated name", async () => {
+test("names: a new Codex thread in the same folder starts with a generated name", async () => {
   await withRig(async rig => {
     const first = await rig.harness("codex");
-    await codexAlias(rig, first, "planner");
+    await codexName(rig, first, "planner");
     await first.close();
     const next = await rig.harness("codex");
     expect(next.agent.name).toBe("codex-shared");
-    expect(aliased(rig, next.agent.id)).toBe(0);
+    expect(nameChosen(rig, next.agent.id)).toBe(0);
     expect(await named(rig, first.agent.id)).toMatchObject({ name: "planner", online: false });
   });
 });
 
-test("aliases: bare-name and comms: sends from every harness reach an alias", async () => {
+test("names: bare-name and comms: sends from every harness reach a chosen name", async () => {
   await withRig(async rig => {
     const target = await rig.harness("pi");
-    await (target.fake as FakePi).tool("comms_alias", { name: "planner" });
+    await (target.fake as FakePi).tool("comms_name", { name: "planner" });
     const claude = await rig.harness("claude"), codex = await rig.harness("codex", undefined, "/projects/codex");
     expect(await (claude.fake as FakeClaude).tool({ tool: "SendMessage", tool_use_id: uuid(), to: "planner", message: "From Claude by bare name" }))
       .toEqual({ result: { success: true, message: "Sent to planner." } });

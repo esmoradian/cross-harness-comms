@@ -49,7 +49,7 @@ export interface HelloParams {
   // A Claude session's inbox socket and engine version, for the native inbox route (ADR-016).
   claude?: { inbox: string; version: string };
   // The token of the identity this session replaces, which Claude's adapter sends after /clear; the core moves that
-  // identity's alias to a newly created one when it is offline on the same harness and host (ADR-005, additive).
+  // identity's chosen name to a newly created one when it is offline on the same harness and host (ADR-005, additive).
   replaces?: string;
 }
 export interface HelloResult {
@@ -82,7 +82,7 @@ export interface MethodTable {
   rename: { params: { address: string; name: string }; result: Agent };
   // Sets the caller's own name and marks it chosen; an offline holder of the name falls back to a generated one,
   // and an online holder refuses with NAME_TAKEN (ADR-005, additive).
-  alias: { params: { token?: string; codex_thread?: string; name: string }; result: Agent };
+  name: { params: { token?: string; codex_thread?: string; name: string }; result: Agent };
   inspect: { params: { id: string }; result: Message };
   status: { params: Record<string, never>; result: { version: string; protocol: number } };
   codex_session_start: { params: { session: SessionRegistration; executable: string }; result: { agent: Agent } };
