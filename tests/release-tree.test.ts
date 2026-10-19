@@ -132,3 +132,23 @@ test("release tree: accepts an existing empty output directory", async () => {
   expect(result.stdout.trim()).toBe("written");
   expect(files(empty)).toEqual(files(tree));
 });
+
+// `main` carries hand-written marketplaces whose `git-subdir` sources point into the `release` branch, so
+// `marketplace add owner/repo` works without naming a branch; each pointer must name a plugin directory the release tree has.
+test("main marketplaces: point into the release branch at plugin directories the release tree writes", () => {
+  const main = (path: string) => JSON.parse(readFileSync(join(repo, path), "utf8"));
+  const pointer = (path: string) => ({ source: "git-subdir", url: "https://github.com/esmoradian/cross-harness-comms.git", path, ref: "release" });
+  const claude = main(".claude-plugin/marketplace.json"), codex = main(".agents/plugins/marketplace.json");
+  expect(claude).toEqual({ name: "comms", owner: { name: "esmoradian" }, plugins: [{ name: "cross-harness-comms", source: pointer("plugins/claude") }] });
+  expect(codex).toEqual({ name: "comms", plugins: [{ name: "cross-harness-comms", source: pointer("plugins/codex"),
+    policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: "Productivity" }] });
+  expect(statSync(join(tree, claude.plugins[0].source.path, ".claude-plugin/plugin.json")).isFile()).toBe(true);
+  expect(statSync(join(tree, codex.plugins[0].source.path, ".codex-plugin/plugin.json")).isFile()).toBe(true);
+  const released = { claude: json(".claude-plugin/marketplace.json"), codex: json(".agents/plugins/marketplace.json") };
+  for (const [ours, theirs] of [[claude, released.claude], [codex, released.codex]]) {
+    expect(ours.name).toBe(theirs.name);
+    expect(ours.plugins[0].name).toBe(theirs.plugins[0].name);
+  }
+  const { policy, category } = released.codex.plugins[0];
+  expect(codex.plugins[0]).toMatchObject({ policy, category });
+});
