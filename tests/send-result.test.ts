@@ -5,8 +5,8 @@ import type { McpResult } from "../adapters/codex/src/index.ts";
 import { eventually, uuid } from "./support/helpers.ts";
 import { registration, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 
-// The core fills the recipient's agent name into SendResult, additive within protocol version 1, and every
-// harness's send tool names the recipient instead of the message ID.
+// The core fills the recipient's agent name, harness, and native session ID into SendResult, additive within
+// protocol version 1, and every harness's send tool names the recipient instead of the message ID.
 
 const sent = (name: string) => `Sent to ${name}.`;
 const queued = (name: string) => `Queued for ${name}, which is offline; it gets the message when it reconnects.`;
@@ -25,6 +25,38 @@ test("send result: the core names the recipient for online and offline recipient
     }
     const result = await sender.request("send", { token: a.token, id: uuid(), to: `comms:${c.agent.name}`, body: "later" });
     expect(result).toMatchObject({ name: "pi-away", state: "queued" });
+  });
+});
+
+// A consumer such as pi-live-subagents learns who a send reached from the result, whatever address it used.
+test("send result: the core names the recipient's harness and session for online and offline recipients, by every address form", async () => {
+  await withRig(async rig => {
+    const sender = await rig.peer(), online = await rig.peer(), away = await rig.peer();
+    const a = await sender.register(registration("pi", uuid(), "/projects/web"));
+    const b = await online.register(registration("codex", uuid(), "/projects/api"));
+    const c = await away.register(registration("pi", uuid(), "/projects/away"));
+    away.close();
+    await eventually(() => rig.agents(), list => expect(list.find(x => x.id === c.agent.id)?.online).toBe(false));
+    for (const { agent } of [b, c]) {
+      const addresses = [agent.name, `comms:${agent.name}`, `comms:${agent.id}`, agent.session_key, `comms:${agent.session_key}`];
+      for (const to of addresses) {
+        const result = await sender.request("send", { token: a.token, id: uuid(), to, body: "hello" });
+        expect(result).toMatchObject({ name: agent.name, harness: agent.harness, session_key: agent.session_key });
+      }
+    }
+  });
+});
+
+test("send result: Pi's comms_send details carry the recipient's harness and session", async () => {
+  await withRig(async rig => {
+    const sender = await rig.harness("pi", uuid(), "/projects/shared");
+    const { pi, codex, away } = await recipients(rig);
+    for (const target of [pi, codex, away]) {
+      for (const to of [`comms:${target.agent.name}`, target.agent.id, target.sessionId]) {
+        const result = await sender.send(to, "Can you take a look?") as PiToolResult;
+        expect(result.details).toMatchObject({ name: target.agent.name, harness: target.harness, session_key: target.sessionId });
+      }
+    }
   });
 });
 
