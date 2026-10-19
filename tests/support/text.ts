@@ -14,4 +14,4 @@ export function expectedClaudeText(fields: { name: string; body: string; reply_t
     + `Reply with SendMessage to comms:${fields.name}.${replies}`;
 }
 
-export const SENDER_HEADER = /^Message from @[a-z0-9._-]+ \(another agent, through comms\):\n/;
+export const SENDER_HEADER = /^Message from @[a-z0-9._/-]+ \(another agent, through comms\):\n/;

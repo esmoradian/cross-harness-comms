@@ -77,13 +77,43 @@ test("names: an agent takes an unheld name, is marked as chosen, and sends and l
   });
 });
 
+test("names: COMMS_TOOLS describes comms_name's name with the slash the name rule allows", () => {
+  const nameTool = COMMS_TOOLS.find(tool => tool.name === ("comms_name" as string))! as { inputSchema: { properties: { name: { description?: string } } } };
+  expect(nameTool.inputSchema.properties.name.description).toMatch(/slash|`\/`|"\/"/);
+});
+
+// HANDOFF-PI-LIVE-SUBAGENTS: names may contain `/`, so Pi session names such as `<group>/<tab label>` can be comms names.
+// The rule is 1 to 64 of lowercase letters, digits, `.`, `_`, `-`, and `/`, not starting or ending with `/`, and not UUID-like.
+
+const SLASH_NAMES = ["misc/w1", "a/b/c", "misc/my-worker.v2_x", `${"a".repeat(31)}/${"b".repeat(32)}`];
+
+test("names: a name with `/` inside is accepted by name and rename, up to 64 characters, and lookups by it reach the agent", async () => {
+  await withRig(async rig => {
+    const caller = await join(rig, "pi"), other = await join(rig, "codex");
+    for (const name of SLASH_NAMES) {
+      expect(await caller.peer.request("name", { token: caller.token, name }), name).toMatchObject({ id: caller.agent.id, name });
+      expect((await other.peer.request("resolve", { name })).agent, name).toMatchObject({ id: caller.agent.id });
+    }
+    expect(SLASH_NAMES.at(-1)).toHaveLength(64);
+    const renamed = await cli(rig, ["rename", `comms:${other.agent.name}`, "team/reviewer"]);
+    expect(renamed.exitCode, renamed.stderr).toBe(0);
+    expect((await named(rig, other.agent.id)).name).toBe("team/reviewer");
+    await caller.peer.request("send", { token: caller.token, id: uuid(), to: "comms:team/reviewer", body: "For the reviewer" });
+    expect((await other.peer.deliveries.next()).message).toMatchObject({ recipient: other.agent.id, body: "For the reviewer" });
+  });
+});
+
 test("names: a name outside the name rule is refused with INVALID_NAME and the name stays", async () => {
   await withRig(async rig => {
     const caller = await join(rig, "pi");
-    for (const name of ["Planner", "has space", "x".repeat(65), "0190abcd-1234-7000"]) {
+    for (const name of ["Planner", "has space", "x".repeat(65), "0190abcd-1234-7000", "/misc", "misc/", "/", "/misc/w1/",
+      "Misc/W1", "misc/w 1", "misc\\w1", `misc/${"x".repeat(60)}`]) {
       await expect(caller.peer.request("name", { token: caller.token, name })).rejects.toMatchObject({ data: { code: "INVALID_NAME" } });
     }
     await expect(caller.peer.request("name", { name: "planner" })).rejects.toMatchObject({ data: { code: "INVALID_TOKEN" } });
+    for (const name of ["/misc", "misc/", "Misc/W1"]) {
+      await expect(caller.peer.request("rename", { address: `comms:${caller.agent.name}`, name }), name).rejects.toMatchObject({ data: { code: "INVALID_NAME" } });
+    }
     expect((await named(rig, caller.agent.id)).name).toBe("pi-shared");
     expect(nameChosen(rig, caller.agent.id)).toBe(0);
   });
@@ -471,6 +501,44 @@ test("names: bare-name and comms: sends from every harness reach a chosen name",
     await eventually(target.incoming, texts => expect(texts).toHaveLength(2));
     expect(rig.rows().map(row => [row.recipient, row.body])).toEqual([
       [target.agent.id, "From Claude by bare name"], [target.agent.id, "From Codex"]]);
+  });
+});
+
+test("names: sends to a name with `/` from every harness reach it, including Claude's SendMessage by bare name", async () => {
+  await withRig(async rig => {
+    const target = await rig.harness("pi", undefined, "/projects/target");
+    await (target.fake as FakePi).tool("comms_name", { name: "misc/w1" });
+    const claude = await rig.harness("claude"), codex = await rig.harness("codex", undefined, "/projects/codex");
+    const pi = await rig.harness("pi", undefined, "/projects/sender");
+    expect(await (claude.fake as FakeClaude).tool({ tool: "SendMessage", tool_use_id: uuid(), to: "misc/w1", message: "From Claude by bare name" }))
+      .toEqual({ result: { success: true, message: "Sent to misc/w1." } });
+    expect(await (claude.fake as FakeClaude).tool({ tool: "SendMessage", tool_use_id: uuid(), to: "comms:misc/w1", message: "From Claude" }))
+      .toEqual({ result: { success: true, message: "Sent to misc/w1." } });
+    expect((await codex.send("comms:misc/w1", "From Codex")) as { content: { text: string }[] }).toMatchObject({ content: [{ text: "Sent to misc/w1." }] });
+    expect((await codex.send("misc/w1", "From Codex by plain name")) as { content: { text: string }[] }).toMatchObject({ content: [{ text: "Sent to misc/w1." }] });
+    expect(await pi.send("misc/w1", "From Pi")).toMatchObject({ content: [{ text: "Sent to misc/w1." }] });
+    expect(await pi.send("comms:misc/w1", "From Pi with comms:")).toMatchObject({ content: [{ text: "Sent to misc/w1." }] });
+    await eventually(target.incoming, texts => expect(texts).toHaveLength(6));
+    expect(rig.rows().map(row => [row.recipient, row.body])).toEqual([
+      [target.agent.id, "From Claude by bare name"], [target.agent.id, "From Claude"], [target.agent.id, "From Codex"],
+      [target.agent.id, "From Codex by plain name"], [target.agent.id, "From Pi"], [target.agent.id, "From Pi with comms:"]]);
+  });
+});
+
+test("names: a sender named with `/` is shown by that name, and every harness replies to it by the address its message gave", async () => {
+  await withRig(async rig => {
+    const sender = await rig.harness("pi", undefined, "/projects/sender");
+    await (sender.fake as FakePi).tool("comms_name", { name: "misc/w1" });
+    for (const harness of ["pi", "claude", "codex"] as Harness[]) {
+      const receiver = await rig.harness(harness, undefined, `/projects/${harness}-receiver`);
+      await sender.send(`comms:${receiver.agent.name}`, `Hello ${harness}`);
+      await eventually(receiver.incoming, texts => expect(texts).toHaveLength(1));
+      expect(receiver.incoming()[0], harness).toContain("misc/w1");
+      const before = sender.incoming().length;
+      await receiver.send("comms:misc/w1", `Reply from ${harness}`, harness === "claude" ? undefined : rig.rows().at(-1)!.id);
+      await eventually(sender.incoming, texts => expect(texts).toHaveLength(before + 1));
+      expect(rig.rows().at(-1), harness).toMatchObject({ recipient: sender.agent.id, body: `Reply from ${harness}` });
+    }
   });
 });
 

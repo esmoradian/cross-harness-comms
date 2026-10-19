@@ -98,3 +98,21 @@ test("pi acknowledges a comms_message only after sendMessage accepted it, and ke
     for (const message of rig.rows()) await rig.state(message.id, "acked");
   });
 });
+
+// pi-live-subagents invariant 29: a message to a busy session is delivered after the running tool call finishes, never interrupting it.
+test("into a busy pi: a message arriving during a running tool call waits for the call to finish, then arrives before the next step", async () => {
+  await withRig(async rig => {
+    const pi = await rig.harness("pi", uuid(), "/Users/ed/src/web");
+    const codex = await rig.harness("codex", uuid(), senderCwd);
+    const fake = pi.fake as FakePi;
+    const finish = fake.toolRunning("bash");
+    await codex.send(`comms:${pi.agent.name}`, "While you work");
+    await eventually(pi.incoming, texts => expect(texts).toHaveLength(1));
+    await rig.state(rig.rows()[0]!.id, "acked");
+    // Handed to Pi, which holds it while the tool runs.
+    expect(fake.timeline).toEqual([{ kind: "tool_start", tool: "bash" }]);
+    expect(fake.userMessages).toEqual([]);
+    finish();
+    expect(fake.timeline).toEqual([{ kind: "tool_start", tool: "bash" }, { kind: "tool_end", tool: "bash" }, { kind: "message", customType: "comms_message" }]);
+  });
+});

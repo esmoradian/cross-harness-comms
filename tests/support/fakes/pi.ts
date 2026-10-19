@@ -1,22 +1,56 @@
 import type { Component } from "@earendil-works/pi-tui";
-import type { PiAPI, PiCommandContext, PiContext, PiMessageRenderer, PiMessageRenderOptions, PiTheme, PiTool, PiToolResult } from "../../../adapters/pi/src/index.ts";
+import type { PiAPI, PiCommandContext, PiMessageRenderer, PiMessageRenderOptions, PiTheme, PiTool, PiToolResult } from "../../../adapters/pi/src/index.ts";
+
+// The events the fake emits, with the fields Pi 0.85.1 gives each (`SessionStartEvent`, `SessionShutdownEvent`,
+// `SessionInfoChangedEvent` in `dist/core/extensions/types.d.ts`).
+export type FakePiEvent = "session_start" | "session_shutdown" | "session_info_changed";
+type Handler = (event: { type: string; reason?: string; name?: string | undefined }, ctx: PiCommandContext) => void | Promise<void>;
+
+// One entry of the fake's agent loop, in the order Pi would put it in the session (see SOURCES.md, Busy delivery).
+export type TimelineEntry = { kind: "tool_start" | "tool_end"; tool: string } | { kind: "message"; customType: string };
 
 export class FakePi implements PiAPI {
   readonly calls: { method: string; args: unknown[] }[] = [];
   readonly tools = new Map<string, PiTool>();
-  // Slash commands by name, and each `ctx.ui.notify` a command handler made.
+  // Slash commands by name, and each `ctx.ui.notify` a command or event handler made.
   readonly commands = new Map<string, Parameters<PiAPI["registerCommand"]>[1]>();
   readonly notifications: { message: string; type?: "info" | "warning" | "error" }[] = [];
   // Message renderers by custom type; Pi keeps one per type, so a later registration replaces an earlier one.
   readonly renderers = new Map<string, PiMessageRenderer>();
   readonly incoming: { message: Parameters<PiAPI["sendMessage"]>[0]; options: Parameters<PiAPI["sendMessage"]>[1] }[] = [];
   readonly userMessages: unknown[] = [];
-  private handlers = new Map<string, Parameters<PiAPI["on"]>[1][]>();
-  readonly context: PiContext;
-  constructor(sessionId: string, cwd: string) {
+  // Pi's shared extension event bus, `pi.events` (`EventBus` in `dist/core/event-bus.d.ts`); `emitted` records every emit.
+  readonly emitted: { channel: string; data: unknown }[] = [];
+  readonly events = {
+    emit: (channel: string, data: unknown) => {
+      this.emitted.push({ channel, data });
+      // Like Pi's EventEmitter: listeners run synchronously in order, and an async listener's rejection is only logged.
+      for (const handler of [...this.listeners.get(channel) ?? []]) void (async () => { await handler(data); })().catch(() => {});
+    },
+    on: (channel: string, handler: (data: unknown) => void): (() => void) => {
+      this.calls.push({ method: "events.on", args: [channel, handler] });
+      this.listeners.set(channel, [...this.listeners.get(channel) ?? [], handler]);
+      return () => this.listeners.set(channel, (this.listeners.get(channel) ?? []).filter(h => h !== handler));
+    },
+  };
+  // The agent loop: `streaming` while a tool runs, steer and follow-up messages held until it ends.
+  readonly timeline: TimelineEntry[] = [];
+  private streaming = false;
+  private held: { customType: string }[] = [];
+  private listeners = new Map<string, ((data: unknown) => void)[]>();
+  private handlers = new Map<string, Handler[]>();
+  private sessionName: string | undefined;
+  // The last `session_info_changed` dispatch, so a test can wait for its handlers.
+  private infoChanged: Promise<void> = Promise.resolve();
+  readonly context: PiCommandContext;
+  // `sessionName` is the name Pi already has at session start, as with `pi -n <name>` or a resumed named session.
+  constructor(sessionId: string, cwd: string, options: { sessionName?: string } = {}) {
+    this.sessionName = options.sessionName;
     this.context = { cwd, sessionManager: { getSessionId: () => {
       this.calls.push({ method: "sessionManager.getSessionId", args: [] });
       return sessionId;
+    } }, ui: { notify: (message, type) => {
+      this.notifications.push({ message, ...(type ? { type } : {}) });
     } } };
   }
   registerTool(tool: PiTool) {
@@ -32,10 +66,7 @@ export class FakePi implements PiAPI {
     this.calls.push({ method: "command", args: [name, args] });
     const command = this.commands.get(name);
     if (!command) throw new Error(`Pi command not registered: ${name}`);
-    const ctx: PiCommandContext = { ...this.context, ui: { notify: (message, type) => {
-      this.notifications.push({ message, ...(type ? { type } : {}) });
-    } } };
-    await command.handler(args, ctx);
+    await command.handler(args, this.context);
   }
   registerMessageRenderer(customType: string, renderer: PiMessageRenderer) {
     this.calls.push({ method: "registerMessageRenderer", args: [customType, renderer] });
@@ -48,17 +79,44 @@ export class FakePi implements PiAPI {
     if (!renderer) throw new Error(`Pi message renderer not registered: ${message.customType}`);
     return renderer({ role: "custom", ...message, timestamp: 1_760_000_000_000 }, options, theme);
   }
-  on(event: Parameters<PiAPI["on"]>[0], handler: Parameters<PiAPI["on"]>[1]) {
+  on(event: string, handler: Handler) {
     this.calls.push({ method: "on", args: [event, handler] });
     this.handlers.set(event, [...this.handlers.get(event) ?? [], handler]);
   }
-  async emit(event: "session_start" | "session_shutdown", reason = "startup") {
-    this.calls.push({ method: event, args: [{ type: event, reason }, this.context] });
-    for (const handler of this.handlers.get(event) ?? []) await handler({ type: event, reason }, this.context);
+  async emit(event: FakePiEvent, reason = "startup") {
+    const payload = event === "session_info_changed" ? { type: event, name: this.getSessionName() } : { type: event, reason };
+    this.calls.push({ method: event, args: [payload, this.context] });
+    for (const handler of this.handlers.get(event) ?? []) await handler(payload, this.context);
   }
+  // `pi.getSessionName()`: the latest name, trimmed, or undefined when unset or cleared (`SessionManager.getSessionName`).
+  getSessionName(): string | undefined {
+    this.calls.push({ method: "getSessionName", args: [] });
+    return this.sessionName?.trim() || undefined;
+  }
+  // `pi.setSessionName(name)`: Pi stores the name with line breaks turned into spaces and trimmed, then fires
+  // `session_info_changed` without waiting for its handlers (`AgentSession.setSessionName`); `renamed()` waits for them.
+  setSessionName(name: string) {
+    this.calls.push({ method: "setSessionName", args: [name] });
+    this.sessionName = name.replace(/[\r\n]+/g, " ").trim();
+    this.infoChanged = this.emit("session_info_changed");
+  }
+  renamed(): Promise<void> { return this.infoChanged; }
   sendMessage(message: Parameters<PiAPI["sendMessage"]>[0], options?: Parameters<PiAPI["sendMessage"]>[1]) {
     this.calls.push({ method: "sendMessage", args: [message, options] });
     this.incoming.push({ message, options });
+    // While streaming, `steer` (the default) and `followUp` wait for the running tool calls; `nextTurn` waits for a prompt.
+    if (!this.streaming) this.timeline.push({ kind: "message", customType: message.customType });
+    else if (options?.deliverAs !== "nextTurn") this.held.push({ customType: message.customType });
+  }
+  // Starts a tool call in a streaming turn and returns the function that finishes it, after which the held messages arrive.
+  toolRunning(tool = "bash"): () => void {
+    this.streaming = true;
+    this.timeline.push({ kind: "tool_start", tool });
+    return () => {
+      this.timeline.push({ kind: "tool_end", tool });
+      for (const message of this.held.splice(0)) this.timeline.push({ kind: "message", ...message });
+      this.streaming = false;
+    };
   }
   sendUserMessage(...args: unknown[]) {
     this.calls.push({ method: "sendUserMessage", args });

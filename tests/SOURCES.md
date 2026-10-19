@@ -238,6 +238,30 @@ These are specified in `names.test.ts`.
   A refused Pi send throws the core's error, so the test reads its `data.code`; Codex keeps only the message text in its error result, so its tests check `isError` and that the text names the address.
 - The migration test drops `agents.name_chosen` from a current database to stand in for one from before chosen names, so the column must stay droppable (not part of an index, key, or check constraint).
 
+## Pi session names, lookups, the Pi outbox, and comms install pi (HANDOFF-PI-LIVE-SUBAGENTS)
+
+Sources: the decisions in `internal/HANDOFF-PI-LIVE-SUBAGENTS.md`; for Pi, the installed 0.85.1 `docs/extensions.md` (`pi.events`, `pi.setSessionName`, `pi.getSessionName`, `session_info_changed`, `pi.sendMessage` and its `deliverAs`) and, under `/opt/homebrew/Cellar/pi-coding-agent/0.85.1/libexec/lib/node_modules/@earendil-works/pi-coding-agent/dist/`, `core/extensions/types.d.ts` (`SessionInfoChangedEvent`, `ExtensionAPI.events`, `setSessionName`, `getSessionName`), `core/event-bus.d.ts` and `core/event-bus.js` (`EventBus`), `core/agent-session.js` (`setSessionName`), and `core/session-manager.js` (`appendSessionInfo`, `getSessionName`); for the outbox, Pi Intercom 0.13.0 at `~/.pi/agent/npm/node_modules/pi-intercom/` (`extension-api.ts`, and in `index.ts` `parseOutboxRequestPayload`, `handleOutboxRequest`, and `resolveOutboxTarget`), and pi-live-subagents' `src/intercom.ts`, its only caller.
+These are specified in `names.test.ts`, `pi-session-names.test.ts`, `pi-outbox.test.ts`, `pi-delivery.test.ts`, and `install-pi.test.ts`.
+
+- `FakePi.events` is Pi's `EventBus`: `on(channel, handler)` returns an unsubscribe function, and `emit(channel, data)` runs every listener synchronously in order, as Node's `EventEmitter` does, with an async listener's rejection only logged.
+  `emitted` records every emit on any channel, so a test reads the adapter's `comms:outbox-result` answers from it.
+- `getSessionName()` returns the latest name trimmed, or undefined when unset or cleared with an empty name, as `SessionManager.getSessionName` does.
+  `setSessionName(name)` stores the name with runs of line breaks turned into a space and trimmed (`appendSessionInfo`), then fires `session_info_changed` with `{ type, name }`, where `name` is the new `getSessionName()`, without awaiting the handlers (`void this._extensionRunner.emit(event)`); `renamed()` lets a test wait for them.
+- A name Pi already has at start, as with `pi -n <alias>` or a resumed named session, is the `sessionName` constructor option, and `rig.harness(..., { pi: { sessionName } })` passes it.
+- Event handlers get an `ExtensionContext`, which has `ui.notify` like a command's context, so the fake passes one context with a recorded `ui.notify` to both, and the refusal warning is read from `notifications` with type `warning`.
+- The busy session model follows `deliverAs` in `docs/extensions.md`: while streaming, `steer` (the default) "Queues the message while streaming. Delivered after the current assistant turn finishes executing its tool calls, before the next LLM call", `followUp` waits for the agent to finish, and `nextTurn` waits for the next user prompt.
+  `FakePi.toolRunning(tool)` starts a streaming turn with one running tool call and returns the function that ends it; a `sendMessage` while it runs is held and lands in `timeline` after the `tool_end`, and one with `nextTurn` does not land at all.
+  Pi gives an extension no way to deliver a custom message into a running tool call, so the test pins that the adapter's choice of `deliverAs` keeps the message behind the call and that nothing goes through `sendUserMessage`.
+- The outbox mirrors Intercom's v1 shapes on `comms:` channels with the brief's departures: a malformed or duplicate request is `failed` (Intercom answers `rejected`), a request without `version: 1` gets no answer (Intercom answers `rejected` `invalid_request` when it has a `requestId`), and there is no confirmation, so `rejected`, `user_cancelled`, and `confirmation_unavailable` never occur.
+  Malformed follows `parseOutboxRequestPayload`: a nonempty string `requestId`, `extensionId`, `extensionName`, and `to`, and a string `message`; a payload without a usable `requestId` cannot be answered and is ignored.
+  `requestId` values look like pi-live-subagents' `live-<uuid>`; they are not comms message IDs, so `messageId` is checked against the stored row instead.
+  A target is ambiguous through the ID-prefix rule only, since names are unique; the test builds the prefix from two agents' UUIDv7 IDs, whose first 8 characters are shared by IDs minted within about 65 seconds.
+  `delivery_failed` is produced with a message over the 1 MB protocol line limit, the one refusal a test can force that is neither a lookup failure nor a missing session.
+- `comms install pi` finds the built Pi package as `plugins/pi` beside the running compiled binary (`runtime.command[0]`, which is `dist/comms` after `bun run build`), and names the install after that package's `package.json` version.
+  The tests give the CLI a platform whose data directory is `<temporary home>/.local/share/comms` and also set `HOME`, so neither reading of `~` reaches the real home.
+  The printed path is absolute, since Pi's `docs/packages.md` lists local packages by absolute path.
+  "Newest" is by `compareVersions`, which the test separates from lexical order with 0.1.9 and 0.1.10.
+
 ## Retention (HANDOFF-RETENTION)
 
 Source: the decisions in `internal/HANDOFF-RETENTION.md`, from `internal/LIST-AND-RETENTION.md` and `internal/NAMING-DESIGN.md`.

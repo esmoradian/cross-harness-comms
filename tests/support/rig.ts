@@ -164,14 +164,16 @@ export class Rig {
       },
     } };
   }
-  async harness(harness: Harness, sessionId = uuid(), cwd = "/projects/shared", options: { claude?: NativeClaudeOptions } = {}): Promise<HarnessSession> {
+  // `pi.sessionName` is the Pi session name the session starts with, as with `pi -n <name>`.
+  async harness(harness: Harness, sessionId = uuid(), cwd = "/projects/shared",
+    options: { claude?: NativeClaudeOptions; pi?: { sessionName?: string } } = {}): Promise<HarnessSession> {
     let handle: AdapterHandle;
     let fake: HarnessSession["fake"];
     let send: HarnessSession["send"];
     let list: HarnessSession["list"];
     let incoming: HarnessSession["incoming"];
     if (harness === "pi") {
-      const pi = new FakePi(sessionId, cwd);
+      const pi = new FakePi(sessionId, cwd, options.pi);
       fake = pi;
       handle = registerPi(pi, this.runtime());
       this.handles.push(handle);
