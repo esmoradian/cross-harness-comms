@@ -3,7 +3,8 @@
     "comms": {
       "command": "/bin/sh",
       "args": ["-c", "exec ./bin/comms mcp"],
-      "cwd": "."
+      "cwd": ".",
+      "env_vars": ["COMMS_DATA_DIR", "COMMS_RELEASE_URL", "CODEX_HOME"]
     }
   }
 }
