@@ -99,6 +99,16 @@ These are specified in `claude-resolve.test.ts`.
 - "Native peer messaging is on" is detected from `CLAUDE_CODE_MESSAGING_SOCKET` at session start.
   The `Peer sessions (N):` section controls where comms peers are appended in `ListAgents`, not whether bare-name resolution skips native Claude peers.
 
+### Send rows name the recipient (HANDOFF-SEND-NAME)
+
+Source: the real Claude Code 2.1.296 probe in `internal/SEND-NAME-FINDINGS.md`, with its log in `/private/tmp/comms-sendname.aXtc/log.jsonl` and the generated `ToolResult` render props, whose row is drawn from the record `tool.call` resolved as `result`.
+These are specified in `claude-send-name.test.ts`.
+
+- `claudeSendResult(to, message)` is Claude's own result for a `SendMessage` that reached a `uds:` address: `{ result: { success, message, display, msg_id } }`, with `display` `“<message>” → <to>` drawing the row and the rest read by the model.
+  The observed `message` goes on after `;` with a delivery note; the fixture keeps only its start, and the observed `ref`, `text`, and `isReadOnly` beside `result` are left out, since a hook returning `{ result }` alone drew the row the same way.
+- A test sets it as `nativeResult` for the address the call reaches, so the fake still does not implement Claude's `SendMessage`; Claude's delivery is simulated by posting its line to that address, as in the native reply tests.
+- Comms reply sockets are named `9` followed by nine digits, `.sock` (`REPLY_SOCKET`); other `uds:` sockets stand in for Claude's own peers.
+
 ## Parent watch (HANDOFF-FIXES-2 fix 4)
 
 These are specified in `attach-parent.test.ts`.
