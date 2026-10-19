@@ -1,5 +1,5 @@
 // The release version of the core, CLI, and plugins; `comms ensure` replaces only an older core.
-export const RELEASE_VERSION = "0.1.26";
+export const RELEASE_VERSION = "0.1.27";
 export type Harness = "pi" | "claude" | "codex";
 
 export interface SessionRegistration {
@@ -132,18 +132,33 @@ export function formatMessage(delivery: Delivery, receiver: "codex" | "claude"):
   return `Message from @${addressName(from)} (another agent, through comms):\n${message.body}\n\n${hint}${replies}`;
 }
 
+// Lookups try an exact name, an agent ID, a harness session ID, the normalized name, then an ID prefix.
 export function resolveAddress(address: string, agents: readonly Agent[]): Agent {
   // A plain name or ID means `comms:`; any other scheme is not ours.
   const scheme = /^([^:]*):/.exec(address)?.[1];
   if (scheme !== undefined && scheme !== "comms") throw failure("UNKNOWN_RECIPIENT", `No agent at ${address}`);
-  const key = scheme === undefined ? address : address.slice(6);
-  const exact = agents.find(agent => agent.name === key || agent.id === key);
-  if (exact) return exact;
+  const key = scheme === undefined ? address : address.slice(6), normal = normalizeName(key);
+  const found = agents.find(agent => agent.name === key) ?? agents.find(agent => agent.id === key);
+  if (found) return found;
+  const sessions = agents.filter(agent => agent.session_key === key);
+  if (sessions.length > 1) throw failure("AMBIGUOUS_RECIPIENT");
+  const named = sessions[0] ?? agents.find(agent => agent.name === normal);
+  if (named) return named;
   const matches = key.length >= 8 && /^[0-9a-f-]+$/.test(key)
     ? agents.filter(agent => agent.id.startsWith(key)) : [];
   if (matches.length > 1) throw failure("AMBIGUOUS_RECIPIENT");
   if (!matches[0]) throw failure("UNKNOWN_RECIPIENT", `No agent named ${key}`);
   return matches[0];
+}
+
+// A comms name: 1-64 of `[a-z0-9._/-]`, not starting or ending with `/`; the core also refuses UUID-like names.
+export const NAME_RULE = /^(?!\/)[a-z0-9._/-]{1,64}(?<!\/)$/;
+
+// Text such as a Pi session name as a comms name: lowercased, runs of other characters as `-`, `-` and `/` trimmed
+// from both ends, and cut to 64; trimmed again after the cut so it never ends in `/`. Undefined when nothing is left.
+export function normalizeName(text: string): string | undefined {
+  const trim = (value: string) => value.replace(/^[-/]+|[-/]+$/g, "");
+  return trim(trim(text.toLowerCase().replace(/[^a-z0-9._/-]+/g, "-")).slice(0, 64)) || undefined;
 }
 
 
@@ -237,7 +252,7 @@ export const COMMS_TOOLS = [
     type: "object", properties: { all: { type: "boolean", description: "Also list agents offline for more than a day" } },
   } },
   { name: "comms_name", description: "Choose this session's comms name, which other agents send to as comms:<name>.", inputSchema: {
-    type: "object", properties: { name: { type: "string", description: "1-64 lowercase letters, digits, dots, underscores or hyphens" } },
+    type: "object", properties: { name: { type: "string", description: "1-64 lowercase letters, digits, dots, underscores, hyphens, or slashes, not starting or ending with a slash" } },
     required: ["name"], additionalProperties: false,
   } },
 ] as const;

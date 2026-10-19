@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { basename } from "node:path";
 import type { CodexEvent } from "./codex/events.ts";
 import { readPackets, writePacket } from "@cross-harness-comms/client";
-import { DEFAULT_POLICY, RELEASE_VERSION, convert, failure, negotiate, resolveAddress, MAX_LINE_BYTES, CLAUDE_NATIVE_MIN_VERSION,
+import { DEFAULT_POLICY, NAME_RULE, RELEASE_VERSION, convert, failure, negotiate, resolveAddress, MAX_LINE_BYTES, CLAUDE_NATIVE_MIN_VERSION,
   compareVersions, messageId, type Agent, type Delivery, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
 import { hash, openStore, type AgentRow, type Store } from "./store.ts";
 import { claudeRoute } from "./claude.ts";
@@ -55,7 +55,8 @@ const string = (value: unknown): string => {
 
 const validName = (value: unknown): string => {
   const name = string(value);
-  if (!/^[a-z0-9._-]{1,64}$/.test(name) || /^[0-9a-f-]{8,}$/.test(name)) throw failure("INVALID_NAME", "Use 1-64 lowercase letters, digits, dots, underscores or hyphens; UUID-like names are reserved");
+  if (!NAME_RULE.test(name) || /^[0-9a-f-]{8,}$/.test(name))
+    throw failure("INVALID_NAME", "Use 1-64 lowercase letters, digits, dots, underscores, hyphens, or slashes, not starting or ending with a slash; UUID-like names are reserved");
   return name;
 };
 

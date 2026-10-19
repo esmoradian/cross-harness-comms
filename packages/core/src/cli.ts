@@ -1,8 +1,9 @@
 import type { Duplex } from "node:stream";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { cp, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { dirname, join } from "node:path";
 import { createClient, readPackets, writePacket, type CommandIO } from "@cross-harness-comms/client";
-import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
+import { VERSION_RANGE, MAX_LINE_BYTES, compareVersions, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
 import { ensure, serve, CORE_VERSION } from "./lifecycle.ts";
 import { runMcp, codexHook, type CodexHost } from "@cross-harness-comms/codex/mcp";
@@ -47,7 +48,8 @@ Usage: comms <command>
   mcp                    Run the Codex MCP server over stdio
   session-start          Mark a Codex thread online from its SessionStart hook JSON
   session-end            Mark a Codex thread offline from its SessionEnd hook JSON
-  install <harness>      Print local integration instructions
+  install pi             Install the built Pi package beside this binary; print the path for Pi's settings
+  install <harness>      Print local integration instructions for claude or codex
   version                Print binary version
   help                   Show this help
 `;
@@ -96,6 +98,32 @@ async function allowCodexReplies(io: CommandIO, platform: Platform): Promise<voi
   io.stdout(`Allowed comms replies without review in ${path}.\n`);
 }
 
+// Copies `plugins/pi` beside this binary to `<data>/pi/<version>`, points `<data>/pi/current` at it, and keeps it and the
+// newest other version (HANDOFF-PI-LIVE-SUBAGENTS). Pi loads the package from `current`, so a switch is one rename.
+async function installPi(io: CommandIO, runtime: CliRuntime): Promise<number> {
+  const source = join(dirname(runtime.command?.[0] ?? process.execPath), "plugins", "pi");
+  const version = await readFile(join(source, "package.json"), "utf8").then(text => (JSON.parse(text) as { version?: unknown }).version, () => undefined);
+  if (version === undefined) throw new Error(`No built Pi package in ${source}; run bun run build and use dist/comms`);
+  // The version names a directory, so it must be a plain version.
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Unreadable Pi package version in ${join(source, "package.json")}`);
+  const root = join(runtime.platform.dataDirectory(), "pi"), current = join(root, "current"), target = join(root, version);
+  const temporary = (label: string) => join(root, `.${label}-${randomBytes(6).toString("hex")}`);
+  await mkdir(root, { recursive: true });
+  const staged = temporary(version), replaced = temporary(`${version}-old`), link = temporary("current");
+  try {
+    await cp(source, staged, { recursive: true });
+    await rename(target, replaced).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+    await rename(staged, target);
+    await symlink(version, link);
+    await rename(link, current);
+  } finally { await Promise.all([staged, replaced, link].map(path => rm(path, { recursive: true, force: true }))); }
+  const others = (await readdir(root)).filter(entry => entry !== "current" && entry !== version);
+  const kept = others.filter(entry => /^\d+\.\d+\.\d+$/.test(entry)).sort((a, b) => compareVersions(b, a)).slice(0, 1);
+  await Promise.all(others.filter(entry => !kept.includes(entry)).map(entry => rm(join(root, entry), { recursive: true, force: true })));
+  io.stdout(`Installed the comms Pi package ${version} in ${target}.\nAdd this path to the packages in Pi's settings: ${current}\n`);
+  return 0;
+}
+
 // What the Codex MCP server and hooks need from the core, passed in so the adapter does not import the core.
 function codexHost(runtime: CliRuntime): CodexHost {
   return { connect: runtime.connect, ensure: () => ensure(runtime), processExecutable: pid => runtime.platform.processExecutable(pid) };
@@ -111,8 +139,8 @@ export async function runCli(argv: readonly string[], io: CommandIO, runtime: Cl
     if (command === "mcp") return await runMcp(io, codexHost(runtime));
     if (command === "session-start" || command === "session-end") return await codexHook(await readInput(io), codexHost(runtime));
     if (command === "install") {
+      if (argv[1] === "pi") return await installPi(io, runtime);
       const instructions: Record<string, string> = {
-        pi: "Build first, then install with pi install /absolute/path/to/dist/plugins/pi.",
         claude: "Add the built dist marketplace with Claude Code's plugin manager, then install cross-harness-comms@comms-local.",
         codex: "Add the built local marketplace, then run codex plugin add cross-harness-comms@comms-local and trust its SessionStart hook.",
       };

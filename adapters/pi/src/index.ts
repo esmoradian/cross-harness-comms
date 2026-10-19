@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { connectSession, type SessionClient } from "@cross-harness-comms/client";
 import { localRuntime } from "@cross-harness-comms/client/runtime";
-import { activeAgo, addressName, COMMS_TOOLS, hiddenLine, messageId, sendSummary, type Harness } from "@cross-harness-comms/protocol";
+import { activeAgo, addressName, COMMS_TOOLS, hiddenLine, messageId, normalizeName, resolveAddress, sendSummary, type Harness } from "@cross-harness-comms/protocol";
 import { renderCommsMessage } from "./card.ts";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
 import type { Component } from "@earendil-works/pi-tui";
@@ -12,7 +12,7 @@ export interface PiContext {
   cwd: string;
   sessionManager: { getSessionId(): string };
 }
-// A command handler's context: Pi's ExtensionCommandContext, of which only `ui.notify` is used.
+// An event or command handler's context: Pi's ExtensionContext or ExtensionCommandContext, of which only `ui.notify` is used.
 export interface PiCommandContext extends PiContext {
   ui: { notify(message: string, type?: "info" | "warning" | "error"): void };
 }
@@ -62,11 +62,16 @@ export interface PiAPI {
   registerTool(tool: PiTool): void;
   registerCommand(name: string, options: { description?: string; handler(args: string, ctx: PiCommandContext): Promise<void> }): void;
   registerMessageRenderer(customType: string, renderer: PiMessageRenderer): void;
-  on(event: "session_start" | "session_shutdown",
-    handler: (event: { type: string; reason?: string }, ctx: PiContext) => void | Promise<void>): void;
+  on(event: "session_start" | "session_shutdown" | "session_info_changed",
+    handler: (event: { type: string; reason?: string; name?: string | undefined }, ctx: PiCommandContext) => void | Promise<void>): void;
+  // Pi's extension event bus, which the outbox listens on.
+  events: { emit(channel: string, data: unknown): void; on(channel: string, handler: (data: unknown) => void): () => void };
+  getSessionName(): string | undefined;
   sendMessage(message: { customType: string; content: string; display: boolean; details?: unknown },
     options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }): void;
 }
+
+const OUTBOX_REQUEST = "comms:outbox-request", OUTBOX_RESULT = "comms:outbox-result";
 
 export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
   let session: SessionClient | undefined;
@@ -85,8 +90,17 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
       // Starts a turn when Pi is idle and steers a busy session.
       pi.sendMessage({ customType: "comms_message", content, display: true, details }, { triggerTurn: true, deliverAs: "steer" });
     });
+    await followSessionName(ctx);
   });
   pi.on("session_shutdown", close);
+  // The Pi session name, normalized, is this session's chosen comms name (HANDOFF-PI-LIVE-SUBAGENTS).
+  const followSessionName = async (ctx: PiCommandContext) => {
+    const name = normalizeName(pi.getSessionName() ?? "");
+    if (!name || !session || ctx.sessionManager.getSessionId() !== nativeId) return;
+    try { await session.name(name); }
+    catch (error) { ctx.ui.notify(`Comms kept its name instead of ${name}: ${error instanceof Error ? error.message : "naming failed"}`, "warning"); }
+  };
+  pi.on("session_info_changed", (_event, ctx) => followSessionName(ctx));
   const chooseName = async (name: string, ctx: PiContext) => {
     if (!session || ctx.sessionManager.getSessionId() !== nativeId) throw new Error("Session is not connected");
     return `This session is now comms:${(await session.name(name)).name}.`;
@@ -117,6 +131,40 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
       return { content: [{ type: "text", text }], details: result };
     },
   });
+  pi.events.on(OUTBOX_REQUEST, data => { void outbox(data); });
+  // Pi Intercom 0.13.0's outbox v1 on comms' own events, so other extensions send as this session without a tool call.
+  const used = new Set<string>();
+  const outbox = async (data: unknown) => {
+    const request = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+    const { requestId, extensionId, extensionName, to, message } = request;
+    // Without version 1 the request is not ours, and without a requestId it cannot be answered.
+    if (request.version !== 1 || typeof requestId !== "string" || !requestId) return;
+    const answer = (status: string, fields: { code?: string; messageId?: string; detail?: string }) =>
+      pi.events.emit(OUTBOX_RESULT, { version: 1, requestId, status, ...fields,
+        ...(typeof extensionId === "string" ? { extensionId } : {}), ...(typeof extensionName === "string" ? { extensionName } : {}) });
+    const text = (value: unknown) => typeof value === "string" && !!value.trim();
+    if (!text(extensionId) || !text(extensionName) || !text(to) || typeof message !== "string")
+      return answer("failed", { code: "invalid_request", detail: "Expected nonempty extensionId, extensionName, and to, and a string message" });
+    if (used.has(requestId)) return answer("failed", { code: "duplicate_request", detail: "This requestId was already answered" });
+    used.add(requestId);
+    const current = session;
+    if (!current) return answer("failed", { code: "session_unavailable", detail: "This session is not connected to comms" });
+    try {
+      const { agents } = await current.list({ include_stale: true });
+      let target;
+      try { target = resolveAddress(to as string, agents); }
+      catch (error) {
+        const code = (error as { data?: { code?: string } }).data?.code === "AMBIGUOUS_RECIPIENT" ? "target_ambiguous" : "target_not_found";
+        return answer("blocked", { code, detail: error instanceof Error ? error.message : code });
+      }
+      if (target.harness === "pi" && target.session_key === nativeId) return answer("blocked", { code: "self_target", detail: "That address is this session" });
+      // Sent by ID, so the message reaches the agent checked above even if a name moves meanwhile.
+      const result = await current.send({ id: messageId(Date.now()), to: target.id, body: message as string });
+      answer("sent", { messageId: result.id, detail: sendSummary(result) });
+    } catch (error) {
+      answer("failed", { code: "delivery_failed", detail: error instanceof Error ? error.message : "Delivery failed" });
+    }
+  };
   return { close };
 }
 
