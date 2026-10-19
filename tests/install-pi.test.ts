@@ -53,6 +53,7 @@ function runtime(root: string): CliRuntime {
       prepareListen: async () => { throw new Error("Unit tests must not listen"); },
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
       watchParent: () => () => {},
+      publishLink: (source, destination) => files.rename(source, destination),
     },
   };
 }
