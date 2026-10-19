@@ -158,18 +158,18 @@ test("activity: Codex's comms_list results include active_at", async () => {
   }, undefined, { now: time.read });
 });
 
-// Claude's ListAgents shows activity relative to $.clock.now(): `active now` under a minute, then whole
+// Claude's ListAgents shows activity relative to $.clock.now(): `last active now` under a minute, then whole
 // minutes, hours, and days.
 const boundaries: [number, string][] = [
-  [0, "active now"],
-  [59_999, "active now"],
-  [60_000, "active 1m ago"],
-  [12 * 60_000 + 30_000, "active 12m ago"],
-  [60 * 60_000 - 1, "active 59m ago"],
-  [60 * 60_000, "active 1h ago"],
-  [24 * 60 * 60_000 - 1, "active 23h ago"],
-  [24 * 60 * 60_000, "active 1d ago"],
-  [3 * 24 * 60 * 60_000 + 5 * 60 * 60_000, "active 3d ago"],
+  [0, "last active now"],
+  [59_999, "last active now"],
+  [60_000, "last active 1m ago"],
+  [12 * 60_000 + 30_000, "last active 12m ago"],
+  [60 * 60_000 - 1, "last active 59m ago"],
+  [60 * 60_000, "last active 1h ago"],
+  [24 * 60 * 60_000 - 1, "last active 23h ago"],
+  [24 * 60 * 60_000, "last active 1d ago"],
+  [3 * 24 * 60 * 60_000 + 5 * 60 * 60_000, "last active 3d ago"],
 ];
 
 const peerSessions = "This session is planner [2a1458].\n\nPeer sessions (1):\n  reviewer [036dfb]  ·  interactive  ·  idle";

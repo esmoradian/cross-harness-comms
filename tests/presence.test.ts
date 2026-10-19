@@ -319,9 +319,9 @@ test("Claude ListAgents: rows without the native header show presence, and one l
     const listing = (await claude.list() as { result: { listing: string } }).result.listing;
     expect(listing).toBe([
       fake.nativeListing,
-      "comms:pi-idle (pi, idle, active 35m ago, /projects/idle)",
-      "comms:pi-web (pi, active, active now, /projects/web)",
-      "comms:pi-gone (pi, offline, active now, /projects/gone)",
+      "comms:pi-idle (pi, idle, last active 35m ago, /projects/idle)",
+      "comms:pi-web (pi, active, last active now, /projects/web)",
+      "comms:pi-gone (pi, offline, last active now, /projects/gone)",
       "2 offline agents not shown",
     ].join("\n"));
     // Claude asks for the agent-facing list; the CLI otherwise shows everything.
@@ -340,9 +340,9 @@ test("Claude ListAgents: rows under the native header show presence, the count e
     const listing = (await claude.list() as { result: { listing: string } }).result.listing;
     expect(listing).toBe([
       peerSessions.replace("Peer sessions (1):", "Peer sessions (4):"),
-      "  pi-idle  ·  pi  ·  idle  ·  active 35m ago  ·  /projects/idle  ·  send to comms:pi-idle",
-      "  pi-web  ·  pi  ·  active  ·  active now  ·  /projects/web  ·  send to comms:pi-web",
-      "  pi-gone  ·  pi  ·  offline  ·  active now  ·  /projects/gone  ·  send to comms:pi-gone",
+      "  pi-idle  ·  pi  ·  idle  ·  last active 35m ago  ·  /projects/idle  ·  send to comms:pi-idle",
+      "  pi-web  ·  pi  ·  active  ·  last active now  ·  /projects/web  ·  send to comms:pi-web",
+      "  pi-gone  ·  pi  ·  offline  ·  last active now  ·  /projects/gone  ·  send to comms:pi-gone",
       "2 offline agents not shown",
     ].join("\n"));
   }, undefined, { now: time.read });
@@ -353,7 +353,7 @@ test("Claude ListAgents: no hidden line when nothing is hidden", async () => {
     const claude = await rig.harness("claude", uuid(), "/projects/shared");
     await rig.harness("pi", uuid(), "/projects/web");
     const listing = (await claude.list() as { result: { listing: string } }).result.listing;
-    expect(listing).toBe(`${(claude.fake as FakeClaude).nativeListing}\ncomms:pi-web (pi, active, active now, /projects/web)`);
+    expect(listing).toBe(`${(claude.fake as FakeClaude).nativeListing}\ncomms:pi-web (pi, active, last active now, /projects/web)`);
   });
 });
 
@@ -367,15 +367,15 @@ test("Pi comms_list: one line per agent with presence and activity, a hidden cou
     const pi = active.fake as FakePi;
     const text = (all?: boolean) => pi.tool("comms_list", all === undefined ? {} : { all }).then(result => result.content.map(c => c.text).join("\n"));
     const rows = [
-      "pi-idle · pi · idle · active 40m ago · /projects/idle · comms:pi-idle",
-      "pi-web · pi · active · active 5m ago · /projects/web · comms:pi-web",
-      "pi-gone · pi · offline · active 5m ago · /projects/gone · comms:pi-gone",
+      "pi-idle · pi · idle · last active 40m ago · /projects/idle · comms:pi-idle",
+      "pi-web · pi · active · last active 5m ago · /projects/web · comms:pi-web",
+      "pi-gone · pi · offline · last active 5m ago · /projects/gone · comms:pi-gone",
     ];
     expect(await text()).toBe([...rows, "2 offline agents not shown"].join("\n"));
     expect(await text(false)).toBe([...rows, "2 offline agents not shown"].join("\n"));
     expect(await text(true)).toBe([
-      "pi-old · pi · offline · active 2d ago · /projects/old · comms:pi-old",
-      "pi-older · pi · offline · active 2d ago · /projects/older · comms:pi-older",
+      "pi-old · pi · offline · last active 2d ago · /projects/old · comms:pi-old",
+      "pi-older · pi · offline · last active 2d ago · /projects/older · comms:pi-older",
       ...rows,
     ].join("\n"));
   }, undefined, { now: time.read });
@@ -414,4 +414,123 @@ test("comms_list takes an optional all boolean", () => {
   const list = COMMS_TOOLS.find(tool => tool.name === "comms_list")!;
   expect(list.inputSchema).toMatchObject({ type: "object", properties: { all: { type: "boolean" } } });
   expect((list.inputSchema as unknown as { required?: string[] }).required ?? []).not.toContain("all");
+});
+
+// HANDOFF-STALE-FIX: `last_seen`, and the activity derived from it, change only when an agent goes from online
+// to offline or comes online. A daemon-owned Codex agent already offline keeps its `last_seen` through any later
+// end, snapshot, disconnect, or core restart, so it reaches the one-day stale rule.
+
+function codexThread(rig: Rig, cwd: string) {
+  const fake = new FakeCodex(uuid(), cwd);
+  rig.codexFakes.set(fake.threadId, fake);
+  return fake;
+}
+// A daemon snapshot whose loaded threads are exactly `fakes`.
+const snapshot = (events: FakeCodexEvents, ...fakes: FakeCodex[]) => events.publish({ method: "comms/daemon-snapshot", executable: "/daemon/codex",
+  params: { threads: fakes.map(fake => ({ id: fake.threadId, cwd: fake.cwd, active_at: iso(T0) })) } });
+const disconnect = (events: FakeCodexEvents) => events.publish({ method: "comms/daemon-disconnected" });
+const row = async (rig: Rig, id: string) => (await rig.agents()).find(agent => agent.id === id);
+
+test("stale: an offline daemon-owned Codex agent keeps its last_seen across core restarts, snapshots that omit it, and disconnects, and is hidden after a day", async () => {
+  const time = clock();
+  await withEvents(time, async (rig, events) => {
+    const closed = codexThread(rig, "/projects/closed"), ended = codexThread(rig, "/projects/ended");
+    await snapshot(events, closed, ended);
+    const ids = [(await rig.agent("codex", closed.threadId)).id, (await rig.agent("codex", ended.threadId)).id];
+
+    // One goes offline by thread/closed, the other by SessionEnd; both are online until now.
+    time.now = T0 + 10 * M;
+    await events.publish({ method: "thread/closed", params: { threadId: closed.threadId } });
+    expect((await rig.hook("session-end", ended.sessionEnd())).exitCode).toBe(0);
+    const offlineAt = iso(T0 + 10 * M);
+    const unchanged = async () => {
+      for (const id of ids) expect(await row(rig, id)).toMatchObject({ online: false, presence: "offline", last_seen: offlineAt });
+    };
+    await unchanged();
+
+    time.now = T0 + 2 * H;
+    await snapshot(events);
+    await unchanged();
+    time.now = T0 + 4 * H;
+    await disconnect(events);
+    await unchanged();
+    time.now = T0 + 6 * H;
+    await rig.restart();
+    await snapshot(events);
+    await unchanged();
+    // After a core start, activity falls back to `last_seen`, so it too is the moment the agent went offline.
+    for (const id of ids) expect((await row(rig, id))?.active_at).toBe(offlineAt);
+    time.now = T0 + 12 * H;
+    await disconnect(events);
+    await rig.restart();
+    await snapshot(events);
+    await unchanged();
+
+    const admin = async () => {
+      const peer = await caller(rig);
+      return (await peer.request("list", {})) as { agents: Agent[]; hidden: number };
+    };
+    time.now = T0 + 10 * M + 23 * H;
+    await disconnect(events);
+    await snapshot(events);
+    await unchanged();
+    const shown = await admin();
+    expect(shown.agents.map(agent => agent.id)).toEqual(ids);
+    expect(shown.hidden).toBe(0);
+
+    time.now = T0 + 10 * M + 25 * H;
+    await rig.restart();
+    await snapshot(events);
+    await disconnect(events);
+    await snapshot(events);
+    await unchanged();
+    const hidden = await admin();
+    expect(hidden.agents).toEqual([]);
+    expect(hidden.hidden).toBe(2);
+  });
+});
+
+test("stale: an online Codex agent going offline records its last_seen at that moment", async () => {
+  const time = clock();
+  await withEvents(time, async (rig, events) => {
+    const omitted = codexThread(rig, "/projects/omitted"), closed = codexThread(rig, "/projects/closed");
+    const ended = codexThread(rig, "/projects/ended"), dropped = codexThread(rig, "/projects/dropped");
+    await snapshot(events, omitted, closed, ended, dropped);
+    const hooked = await rig.harness("codex", uuid(), "/projects/hooked");
+    const id = async (fake: FakeCodex) => (await rig.agent("codex", fake.threadId)).id;
+    const offline = async (agent: string, at: number) =>
+      expect(await row(rig, agent)).toMatchObject({ online: false, presence: "offline", last_seen: iso(at) });
+
+    time.now = T0 + 1 * H;
+    await snapshot(events, closed, ended, dropped);
+    await offline(await id(omitted), T0 + 1 * H);
+    time.now = T0 + 2 * H;
+    await events.publish({ method: "thread/closed", params: { threadId: closed.threadId } });
+    await offline(await id(closed), T0 + 2 * H);
+    time.now = T0 + 3 * H;
+    expect((await rig.hook("session-end", ended.sessionEnd())).exitCode).toBe(0);
+    await offline(await id(ended), T0 + 3 * H);
+    time.now = T0 + 4 * H;
+    await disconnect(events);
+    await offline(await id(dropped), T0 + 4 * H);
+    time.now = T0 + 5 * H;
+    expect((await rig.hook("session-end", (hooked.fake as FakeCodex).sessionEnd())).exitCode).toBe(0);
+    await offline(hooked.agent.id, T0 + 5 * H);
+  });
+});
+
+// The core stops with the thread online and forgets which threads were loaded; the first snapshot after the
+// restart that omits the thread is when it goes offline, as today, not its older `last_seen` from discovery.
+test("stale: a Codex agent online when the core stopped records its last_seen when the first snapshot after the restart omits it", async () => {
+  const time = clock();
+  await withEvents(time, async (rig, events) => {
+    const fake = codexThread(rig, "/projects/api");
+    await snapshot(events, fake);
+    const agent = await rig.agent("codex", fake.threadId);
+    expect(agent.last_seen).toBe(iso(T0));
+    time.now = T0 + 2 * D;
+    await rig.restart();
+    await snapshot(events);
+    expect(await row(rig, agent.id)).toMatchObject({ online: false, presence: "offline", last_seen: iso(T0 + 2 * D) });
+  });
 });

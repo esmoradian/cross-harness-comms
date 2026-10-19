@@ -189,6 +189,15 @@ These are specified in `presence.test.ts`.
   Tests use two hidden agents, so the singular wording is not specified.
 - Claude's `ListAgents` runs `comms list` with `include_stale: false`; `comms list` otherwise adds `include_stale: true`.
 
+### Offline Codex agents stay stale, and rows say last active (HANDOFF-STALE-FIX)
+
+Source: the decision in `internal/HANDOFF-STALE-FIX.md`, after the real check in `internal/VALIDATION-RESULTS-0.1.22.md`.
+These are specified in the `stale:` tests in `presence.test.ts`, and the row text also in `activity.test.ts`.
+
+- `last_seen` changes only when an agent goes from online to offline, or comes online; a daemon-owned Codex agent already offline keeps it through a later end, a snapshot that omits it, a daemon disconnect, and a core restart.
+- A Codex thread online when the core stopped goes offline at the first snapshot after the restart that omits it, and `last_seen` records that moment, as before.
+- The relative activity text is `last active now`, `last active 5m ago`, and so on, in Claude's `ListAgents` rows and Pi's `comms_list` lines; presence words are unchanged.
+
 ## Claude lifecycle
 
 Claude lifecycle tests use the generated 2.1.289 `SessionEndInput` and `ClassicEventOf` declarations, confirmed in the real 2.1.296 clear check.
