@@ -1,25 +1,31 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 
-// `comms install pi` is gone: it fails as any unknown `install` argument does and writes nothing, even with a built Pi
-// package beside the binary, which the removed command would have installed into the data directory.
+// `comms install` is gone: with any arguments it fails exactly as any unknown command does, and writes nothing to the data
+// directory or to Codex's config. Codex's home is a temporary directory, through both the platform and CODEX_HOME, so the
+// real ~/.codex is never read or written.
 
 let root: string;
+let previous: string | undefined;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "comms-install-unknown-"));
   mkdirSync(join(root, "data"));
-  mkdirSync(join(root, "bin", "plugins", "pi"), { recursive: true });
-  writeFileSync(join(root, "bin", "plugins", "pi", "package.json"), JSON.stringify({ name: "cross-harness-comms", version: "0.1.0" }));
+  mkdirSync(join(root, "codex"));
+  previous = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = join(root, "codex");
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
+  rmSync(root, { recursive: true, force: true });
+});
 
 function runtime(): CliRuntime {
-  const refuse = (what: string) => async () => { throw new Error(`install must not ${what}`); };
+  const refuse = (what: string) => async () => { throw new Error(`an unknown command must not ${what}`); };
   return {
-    connect: refuse("connect to the core"), command: [join(root, "bin", "comms")], compiled: true,
+    connect: refuse("connect to the core"),
     platform: {
       dataDirectory: () => join(root, "data"), socketAddress: () => "memory://comms", binaryName: () => "comms",
       processExecutable: async () => undefined, codexHome: () => join(root, "codex"),
@@ -35,20 +41,19 @@ async function cli(...argv: string[]) {
   return { exitCode, stdout, stderr };
 }
 
-test("install pi: fails like an unknown install argument and creates nothing in the data directory", async () => {
-  const unknown = await cli("install", "no-such-harness");
-  expect(unknown.exitCode).not.toBe(0);
-  const pi = await cli("install", "pi");
-  expect(pi).toEqual(unknown);
-  expect(pi.stdout).toBe("");
-  // The refusal must not offer pi as a supported integration.
-  expect(pi.stderr).not.toMatch(/\bpi\b/i);
-  expect(readdirSync(join(root, "data"), { recursive: true })).toEqual([]);
-});
+for (const argv of [["install"], ["install", "claude"], ["install", "codex", "--allow-replies"], ["install", "pi"]]) {
+  test(`comms ${argv.join(" ")} fails like an unknown command and writes nothing`, async () => {
+    const unknown = await cli("no-such-command");
+    expect(unknown.exitCode).not.toBe(0);
+    expect(await cli(...argv)).toEqual(unknown);
+    expect(readdirSync(join(root, "data"), { recursive: true })).toEqual([]);
+    expect(existsSync(join(root, "codex", "config.toml"))).toBe(false);
+  });
+}
 
-test("comms help no longer mentions install pi", async () => {
+test("comms help does not mention install", async () => {
   const help = await cli("help");
   expect(help.exitCode).toBe(0);
-  expect(help.stdout).toMatch(/^ {2}install <harness>\s+\S/m);
-  expect(help.stdout).not.toMatch(/install pi\b/);
+  expect(help.stdout).not.toMatch(/^\s*install\b/m);
+  expect(help.stdout).not.toMatch(/comms install/);
 });
