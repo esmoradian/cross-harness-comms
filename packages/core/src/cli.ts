@@ -38,7 +38,7 @@ Usage: comms <command>
   ack                    Acknowledge JSON on stdin: token, id
   native-ack             Acknowledge a native Claude inbox line, JSON on stdin: token, from
   detach                 Close a session using its token on stdin
-  list                   List agents and presence as JSON; optional JSON stdin: token
+  list                   List agents and presence as JSON; optional JSON stdin: token, include_stale
   resolve                Find the agent named exactly, JSON on stdin: name, optional token, skip_claude
   rename <address> <name> Rename an agent
   inspect <message-id>   Inspect delivery state
@@ -63,7 +63,8 @@ const COMMANDS: Record<string, [RequestMethod, Params]> = {
   ack: ["ack", stdin],
   "native-ack": ["native_ack", stdin],
   detach: ["detach", stdin],
-  list: ["list", (_argv, io) => readInput(io, true)],
+  // People see every agent; agent-facing lists pass `include_stale: false`.
+  list: ["list", async (_argv, io) => ({ include_stale: true, ...await readInput(io, true) })],
   resolve: ["resolve", stdin],
   rename: ["rename", async argv => {
     if (!argv[1] || !argv[2]) throw new Error("Usage: comms rename <address> <name>");

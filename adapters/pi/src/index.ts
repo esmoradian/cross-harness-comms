@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { connectSession, type SessionClient } from "@cross-harness-comms/client";
 import { localRuntime } from "@cross-harness-comms/client/runtime";
-import { addressName, COMMS_TOOLS, listedAgents, messageId, sendSummary, type Harness } from "@cross-harness-comms/protocol";
+import { activeAgo, addressName, COMMS_TOOLS, hiddenLine, messageId, sendSummary, type Harness } from "@cross-harness-comms/protocol";
 import { renderCommsMessage } from "./card.ts";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
 import type { Component } from "@earendil-works/pi-tui";
@@ -87,11 +87,14 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
     name, label: name === "comms_send" ? "Send agent message" : "List agents", description, parameters: inputSchema,
     async execute(_id, params, _signal, _onUpdate, ctx) {
       if (!session || ctx.sessionManager.getSessionId() !== nativeId) throw new Error("Session is not connected");
-      const result = name === "comms_list" ? await session.list() : await session.send({
+      const result = name === "comms_list" ? await session.list({ include_stale: params.all === true }) : await session.send({
         id: messageId(Date.now()), to: params.to as string, body: params.text as string,
         ...(typeof params.reply_to === "string" ? { reply_to: params.reply_to } : {}),
       });
-      const text = "agents" in result ? JSON.stringify(listedAgents(result.agents)) : sendSummary(result);
+      const text = "agents" in result ? [
+        ...result.agents.map(a => [a.name, a.harness, a.presence, activeAgo(a, Date.now()), a.cwd, `comms:${a.name}`].join(" · ")),
+        ...(result.hidden ? [hiddenLine(result.hidden)] : []),
+      ].join("\n") : sendSummary(result);
       return { content: [{ type: "text", text }], details: result };
     },
   });

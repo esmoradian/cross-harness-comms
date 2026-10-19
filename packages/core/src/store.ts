@@ -42,7 +42,8 @@ export function openStore(path: string) {
     agentNamed: (name: string) => db.query(`${agentFields} WHERE name = ?`).get(name) as AgentRow | null,
     agentWithToken: (token: unknown) => typeof token === "string"
       ? (db.query("SELECT id FROM agents WHERE token_hash = ?").get(hash(token)) as { id: string } | null)?.id : undefined,
-    seen: (agent: string) => db.query("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date().toISOString(), agent),
+    // `time` is the core's clock, so presence and the stale rule measure on one clock.
+    seen: (agent: string, time: number) => db.query("UPDATE agents SET last_seen = ? WHERE id = ?").run(new Date(time).toISOString(), agent),
     message: (id: string) => db.query("SELECT * FROM messages WHERE id = ?").get(id) as Message | null,
     pending: (agent: string) => db.query("SELECT * FROM messages WHERE recipient = ? AND state != 'acked' ORDER BY rowid").all(agent) as Message[],
     // State is committed before a message is handed over; only a queued message becomes delivered.

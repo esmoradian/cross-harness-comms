@@ -1,5 +1,5 @@
 // The release version of the core, CLI, and plugins; `comms ensure` replaces only an older core.
-export const RELEASE_VERSION = "0.1.21";
+export const RELEASE_VERSION = "0.1.22";
 export type Harness = "pi" | "claude" | "codex";
 
 export interface SessionRegistration {
@@ -87,8 +87,9 @@ export interface MethodTable {
   ack: { params: { token: string; id: string }; result: { id: string; state: "acked" } };
   // A Claude session acknowledging the native inbox line sent from the reply socket `from` (ADR-016).
   native_ack: { params: { token: string; from: string }; result: { id: string } };
-  // `include_stale` also returns agents offline for more than a day, and `hidden` counts those left out (ADR-005, additive).
-  list: { params: { token?: string; include_stale?: boolean }; result: { agents: Agent[]; notice?: string; hidden?: number } };
+  // `include_stale` also returns agents offline for more than a day, and `hidden` counts those left out, of which
+  // `hidden_claude` are Claude agents (ADR-005, additive).
+  list: { params: { token?: string; include_stale?: boolean }; result: { agents: Agent[]; notice?: string; hidden?: number; hidden_claude?: number } };
   // The one agent whose name is exactly `name`, with the fields `list` gives the caller, or null;
   // `skip_claude` answers null for a Claude agent (ADR-005, additive).
   resolve: { params: { token?: string; name: string; skip_claude?: boolean }; result: { agent: Agent | null } };
@@ -224,11 +225,24 @@ export const COMMS_TOOLS = [
       text: { type: "string" }, reply_to: { type: "string" },
     }, required: ["to", "text"], additionalProperties: false,
   } },
-  { name: "comms_list", description: "List cross-harness agents and their presence.", inputSchema: { type: "object", properties: {} } },
+  { name: "comms_list", description: "List cross-harness agents and their presence.", inputSchema: {
+    type: "object", properties: { all: { type: "boolean", description: "Also list agents offline for more than a day" } },
+  } },
 ] as const;
 
 // What comms_list returns: each agent with the address to send it to.
 export const listedAgents = (agents: readonly Agent[]) => agents.map(agent => ({ ...agent, address: `comms:${agent.name}` }));
+
+// An agent's last activity relative to `time`, in whole units: `active now`, then minutes, hours, and days (ADR-018).
+export function activeAgo(agent: Agent, time: number): string {
+  const minutes = Math.floor((time - Date.parse(agent.active_at ?? agent.last_seen)) / 60_000);
+  if (minutes < 1) return "active now";
+  if (minutes < 60) return `active ${minutes}m ago`;
+  return minutes < 1440 ? `active ${Math.floor(minutes / 60)}h ago` : `active ${Math.floor(minutes / 1440)}d ago`;
+}
+
+// The line agent-facing lists end with when `list` left out stale agents.
+export const hiddenLine = (hidden: number) => `${hidden} offline agent${hidden === 1 ? "" : "s"} not shown`;
 
 // An agent's name from its `comms:` address.
 export const addressName = (address: string) => address.replace(/^comms:/, "");

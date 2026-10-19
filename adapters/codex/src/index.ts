@@ -1,5 +1,5 @@
 import { createClient, retryDisconnected, type AdapterRuntime, type CommsClient } from "@cross-harness-comms/client";
-import { listedAgents, messageId, sendSummary, VERSION_RANGE } from "@cross-harness-comms/protocol";
+import { hiddenLine, listedAgents, messageId, sendSummary, VERSION_RANGE } from "@cross-harness-comms/protocol";
 
 export interface SessionStartInput {
   hook_event_name: "SessionStart";
@@ -52,8 +52,9 @@ export function createCodexAdapter(runtime: AdapterRuntime): CodexAdapter {
         const args = call.params.arguments ?? {};
         let text: string;
         if (call.params.name === "comms_list") {
-          const { agents } = await request(connection => connection.request("list", {}));
-          text = JSON.stringify(listedAgents(agents));
+          const { agents, hidden } = await request(connection => connection.request("list", { include_stale: args.all === true }));
+          // The count is its own item, so the JSON stays parseable.
+          return { content: [{ type: "text", text: JSON.stringify(listedAgents(agents)) }, ...(hidden ? [{ type: "text" as const, text: hiddenLine(hidden) }] : [])] };
         } else if (call.params.name === "comms_send") {
           const params = { codex_thread: thread, id: messageId(Date.now()), to: args.to as string, body: args.text as string,
             ...(typeof args.reply_to === "string" ? { reply_to: args.reply_to } : {}) };

@@ -1,15 +1,7 @@
-import { formatMessage, messageId, splitLines, VERSION_RANGE, sendSummary, type Agent, type Delivery, type HelloResult, type SendResult, type WirePacket } from "@cross-harness-comms/protocol";
+import { activeAgo, formatMessage, hiddenLine, messageId, splitLines, VERSION_RANGE, sendSummary, type Agent, type Delivery, type HelloResult, type MethodTable, type SendResult, type WirePacket } from "@cross-harness-comms/protocol";
 import type { ClaudeAPI, ClaudeOn, ProcessRunResult, ToolEvent, ToolResult } from "./api.ts";
 
 type Options = { binary: string; host: string };
-
-// An agent's last activity relative to now, in whole units: `active now`, then minutes, hours, and days (ADR-018).
-function activeAgo(agent: Agent, time: number): string {
-  const minutes = Math.floor((time - Date.parse(agent.active_at ?? agent.last_seen)) / 60_000);
-  if (minutes < 1) return "active now";
-  if (minutes < 60) return `active ${minutes}m ago`;
-  return minutes < 1440 ? `active ${Math.floor(minutes / 60)}h ago` : `active ${Math.floor(minutes / 1440)}d ago`;
-}
 
 interface ClaudeState {
   binary: string;
@@ -262,7 +254,7 @@ async function sendMessage($: ClaudeAPI, state: ClaudeState, event: Extract<Tool
 async function listAgents($: ClaudeAPI, state: ClaudeState, event: ToolEvent, next: (event: ToolEvent) => Promise<ToolResult>): Promise<ToolResult> {
   const native = await next(event);
   if ("deny" in native) return native;
-  const result = await command($, state, "list", state.token ? { token: state.token } : undefined) as { agents: Agent[] };
+  const result = await command($, state, "list", { ...(state.token ? { token: state.token } : {}), include_stale: false }) as MethodTable["list"]["result"];
   const original = native.result as { listing?: unknown };
   if (!original || typeof original.listing !== "string") return native;
   // Native peer messaging lists Claude peers by short refs rather than session IDs,
@@ -271,15 +263,17 @@ async function listAgents($: ClaudeAPI, state: ClaudeState, event: ToolEvent, ne
   const peerSection = header.test(original.listing);
   const shown = result.agents.filter(a => a.harness !== "claude" || (!peerSection && a.session_key !== state.sessionId));
   const time = await $.clock!.now();
+  // Under the native header Claude agents are never comms rows, so their hidden ones are not counted either.
+  const hidden = (result.hidden ?? 0) - (peerSection ? result.hidden_claude ?? 0 : 0);
   const extra = shown
     // Under the native header, rows match native peers; on the native route, Claude
     // sends to a reply socket with its own SendMessage.
     .map(a => peerSection
-      ? `  ${a.name}  ·  ${a.harness}  ·  ${a.online ? "online" : "offline"}  ·  ${activeAgo(a, time)}  ·  ${a.cwd}  ·  send to ${a.claude_address ?? `comms:${a.name}`}`
-      : `comms:${a.name} (${a.harness}, ${a.online ? "online" : "offline"}, ${activeAgo(a, time)}, ${a.cwd})`);
-  if (!extra.length) return native;
+      ? `  ${a.name}  ·  ${a.harness}  ·  ${a.presence}  ·  ${activeAgo(a, time)}  ·  ${a.cwd}  ·  send to ${a.claude_address ?? `comms:${a.name}`}`
+      : `comms:${a.name} (${a.harness}, ${a.presence}, ${activeAgo(a, time)}, ${a.cwd})`);
+  if (!extra.length && !hidden) return native;
   const listing = original.listing.replace(header, (_, count: string) => `Peer sessions (${Number(count) + extra.length}):`);
-  return { result: { ...original, listing: listing + "\n" + extra.join("\n") } };
+  return { result: { ...original, listing: [listing, ...extra, ...(hidden ? [hiddenLine(hidden)] : [])].join("\n") } };
 }
 
 export function registerClaude(on: ClaudeOn, options: Options): { close(): Promise<void> } {

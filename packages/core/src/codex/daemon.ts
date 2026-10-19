@@ -149,6 +149,12 @@ async function readThread(client: DaemonClient, id: string): Promise<CodexThread
   const response = await client.request<{ thread: unknown }>("thread/read", { threadId: id }).catch(() => undefined);
   return threadMetadata({ ...record(response?.thread), id });
 }
+// The daemon's effective `thread_unload_delay_secs`, an open key of `ConfigReadResponse.config`; read only, never written.
+async function unloadDelay(client: DaemonClient): Promise<number | undefined> {
+  const response = await client.request("config/read", {}).catch(() => undefined);
+  const value = record(record(response)?.config)?.thread_unload_delay_secs;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 async function snapshot(client: DaemonClient, platform: Platform): Promise<CodexSnapshot> {
   const threads: CodexThread[] = [];
   let cursor: string | null = null;
@@ -202,11 +208,12 @@ export function watchCodexDaemon(platform: Platform, options: { signal?: AbortSi
       try {
         client = await open(join(platform.codexHome(), "app-server-control", "app-server-control.sock"), options.timeoutMs ?? 2000, signal);
         await initialize(client);
+        const unload_delay_secs = await unloadDelay(client);
         const initial = await snapshot(client, platform);
         if (signal.aborted) return;
         disconnected = false; delay = options.retryMs ?? 1000;
         const known = new Set(initial.threads.map(thread => thread.id));
-        yield { method: "comms/daemon-snapshot", executable: initial.executable, params: { threads: initial.threads } };
+        yield { method: "comms/daemon-snapshot", executable: initial.executable, params: { threads: initial.threads, ...(unload_delay_secs === undefined ? {} : { unload_delay_secs }) } };
         for await (const notification of client.notifications) {
           if (signal.aborted) return;
           const event = notificationEvent(notification, initial.executable);

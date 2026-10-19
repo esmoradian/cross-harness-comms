@@ -70,11 +70,17 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   const registrations = new Map<string, Promise<unknown>>();
   // Each agent's last activity in epoch milliseconds, kept in memory only; it never moves backward (ADR-018).
   const activity = new Map<string, number>();
-  // An agent row with its presence and activity, as every listing shows it.
+  // An agent row with its presence and activity, as every listing shows it. A loaded Codex thread with no
+  // activity for the daemon's unload delay has a window open, so that delay separates active from idle.
   const present = (agent: AgentRow, codexOnline: boolean): Agent => {
-    const active = activity.get(agent.id);
-    return { ...agent, online: live.has(agent.id) || codexOnline, active_at: active === undefined ? agent.last_seen : new Date(active).toISOString() };
+    const active = activity.get(agent.id), online = live.has(agent.id) || codexOnline;
+    const active_at = active === undefined ? agent.last_seen : new Date(active).toISOString();
+    const threshold = (agent.harness === "codex" ? codex.unloadDelaySecs() : 1800) * 1000;
+    const presence = !online ? "offline" : ctx.now() - Date.parse(active_at) <= threshold ? "active" : "idle";
+    return { ...agent, online, active_at, presence };
   };
+  // Offline for more than a day, which agent-facing lists leave out.
+  const stale = (agent: Agent) => !agent.online && ctx.now() - Date.parse(agent.last_seen) > 86_400_000;
   const agents = (): Agent[] => {
     const codex = store.codexOnline();
     return store.agents().map(agent => present(agent, codex.has(agent.id)));
@@ -87,7 +93,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     for (const finish of connection.pings.values()) finish(false);
     if (connection.agent && live.get(connection.agent) === connection) {
       live.delete(connection.agent);
-      if (!ctx.closed) store.seen(connection.agent);
+      if (!ctx.closed) store.seen(connection.agent, ctx.now());
     }
   };
   const authenticated = (params: Record<string, unknown>) => {
@@ -127,14 +133,15 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       ctx.touch(sender);
       ctx.deliver(message);
     },
-    // Creates or refreshes an agent; a token hash is replaced only when given.
+    // Creates or refreshes an agent, which counts as its activity; a token hash is replaced only when given.
     upsert: (session, tokenHash) => {
-      const now = new Date().toISOString();
+      const now = new Date(ctx.now()).toISOString();
       const agent = store.agentBySession(session.harness, session.session_key);
       if (agent) {
         db.query("UPDATE agents SET host = ?, cwd = ?, last_seen = ? WHERE id = ?").run(session.host, session.cwd, now, agent.id);
         if (tokenHash) db.query("UPDATE agents SET token_hash = ? WHERE id = ?").run(tokenHash, agent.id);
-        return { ...present(agent, true), ...session, last_seen: now };
+        ctx.touch(agent.id);
+        return present({ ...agent, ...session, last_seen: now }, true);
       }
       const base = `${session.harness}-${basename(session.cwd) || "session"}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64);
       let name = base, suffix = 1;
@@ -143,7 +150,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
         .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null);
       if (session.harness !== "claude") claude.openReplySockets();
-      return { ...session, id, name, last_seen: now, online: true };
+      ctx.touch(id);
+      return present({ ...session, id, name, last_seen: now }, true);
     },
   };
   const claude = claudeRoute(ctx, options.nativeAckMs ?? 5000);
@@ -180,7 +188,6 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       }
       const token = matches ? suppliedToken as string : randomBytes(32).toString("hex");
       const agent = ctx.upsert(session, hash(token));
-      ctx.touch(agent.id);
       if (previous) {
         detach(previous);
         try { packet(previous, { jsonrpc: "2.0", method: "session_replaced", params: {} }); previous.stream.end(); }
@@ -219,7 +226,9 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       }
       case "codex_session_end": codex.end(string(params.session_key)); return { ok: true };
       case "list": {
-        return { agents: agents().map(claude.addressing(params.token)) };
+        const all = agents(), hidden = params.include_stale === true ? [] : all.filter(stale);
+        return { agents: all.filter(agent => !hidden.includes(agent)).map(claude.addressing(params.token)),
+          hidden: hidden.length, hidden_claude: hidden.filter(agent => agent.harness === "claude").length };
       }
       case "resolve": {
         // Exact names only, never addresses or IDs; `skip_claude` leaves Claude agents to Claude's own messaging.

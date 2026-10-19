@@ -18,6 +18,8 @@ type Lifecycle = { executable: string; runtime_state: CodexRuntimeState; ended: 
 export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncIterable<CodexEvent>) {
   const { store } = ctx, { db } = store;
   const chains = new Map<string, Promise<void>>();
+  // The daemon's `thread_unload_delay_secs` from its latest connection's snapshot, or Codex's default 1800.
+  let unloadDelaySecs = 1800;
   const lifecycle = (agent: string) => db.query("SELECT executable, runtime_state, ended, ended_at, daemon_owned FROM codex_lifecycle WHERE agent = ?")
     .get(agent) as Lifecycle | null;
   const offline = (agent: string) => db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent);
@@ -49,7 +51,6 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
   };
   const start = (session: SessionRegistration, executable: string): Agent => {
     const agent = ctx.upsert(session);
-    ctx.touch(agent.id);
     db.query(`INSERT INTO codex_lifecycle (agent, executable, runtime_state) VALUES (?, ?, 'idle')
       ON CONFLICT(agent) DO UPDATE SET executable = excluded.executable, runtime_state = 'idle', ended = 0, ended_at = NULL`).run(agent.id, executable);
     activate(agent.id, executable);
@@ -64,7 +65,7 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
         ended_at = CASE WHEN excluded.ended = 1 THEN excluded.ended_at ELSE codex_lifecycle.ended_at END`)
       .run(agent.id, state, ended ? 1 : 0, ended ? ctx.now() : null);
     offline(agent.id);
-    store.seen(agent.id);
+    store.seen(agent.id, ctx.now());
   };
   const nativeActivity = (agent: string, time?: string) => {
     if (time && Number.isFinite(Date.parse(time))) ctx.touch(agent, Date.parse(time));
@@ -80,7 +81,6 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
       ON CONFLICT(agent) DO UPDATE SET executable = excluded.executable, daemon_owned = 1,
         runtime_state = CASE WHEN codex_lifecycle.ended = 1 THEN codex_lifecycle.runtime_state ELSE excluded.runtime_state END`)
       .run(agent.id, executable, state);
-    if (!existing) ctx.touch(agent.id);
     if (!previous?.ended && (!existing || snapshot)) {
       if (state === "notLoaded" || state === "systemError") end(thread.id, false, state);
       else activate(agent.id, executable);
@@ -97,6 +97,7 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
       case "thread/started": discover(event.params.thread, event.executable, false); break;
       case "comms/daemon-discovered": discover(event.params.thread, event.executable, true); break;
       case "comms/daemon-snapshot": {
+        unloadDelaySecs = event.params.unload_delay_secs ?? 1800;
         const threads = event.params.threads.filter(thread => !thread.parentThreadId && !thread.ephemeral);
         daemonOffline(new Set(threads.map(thread => thread.id)));
         for (const thread of threads) discover(thread, event.executable, true);
@@ -146,5 +147,5 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
     await iterator?.return?.();
     await task;
   };
-  return { sender, deliver, start, end, close };
+  return { sender, deliver, start, end, close, unloadDelaySecs: () => unloadDelaySecs };
 }

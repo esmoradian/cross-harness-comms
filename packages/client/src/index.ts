@@ -100,7 +100,7 @@ export async function retryDisconnected<C, T>(connection: () => Promise<C>, call
 
 export interface SessionClient extends AdapterHandle {
   send(params: Omit<SendParams, "token">): Promise<MethodTable["send"]["result"]>;
-  list(): Promise<MethodTable["list"]["result"]>;
+  list(params?: { include_stale?: boolean }): Promise<MethodTable["list"]["result"]>;
 }
 
 // A session retains its token. Reconnect registers the same native identity and
@@ -171,8 +171,8 @@ export async function connectSession(runtime: AdapterRuntime, session: SessionRe
       if (current === connection) current = undefined;
       await connection.client.close();
     }),
-    async list() {
-      const result = await (await ready()).client.request("list", {});
+    async list(params = {}) {
+      const result = await (await ready()).client.request("list", params);
       if (result.notice) runtime.notice(result.notice);
       return result;
     },
