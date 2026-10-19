@@ -49,7 +49,7 @@ Usage: comms <command>
   session-start          Mark a Codex thread online from its SessionStart hook JSON
   session-end            Mark a Codex thread offline from its SessionEnd hook JSON
   install pi             Install the built Pi package beside this binary; print the path for Pi's settings
-  install <harness>      Print local integration instructions for claude or codex
+  install <harness>      Print the published install commands for claude or codex
   version                Print binary version
   help                   Show this help
 `;
@@ -84,8 +84,9 @@ const COMMANDS: Record<string, [RequestMethod, Params]> = {
   status: ["status", async () => ({})],
 };
 
-// Codex's standing authorization for comms replies, which its automatic review otherwise rejects.
-const CODEX_APPROVAL = '[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]\napproval_mode = "approve"\n';
+// Codex's standing authorization for comms replies, which its automatic review otherwise rejects. It names the published plugin;
+// a local build's `@comms-local` approval is declared by hand.
+const CODEX_APPROVAL = '[plugins."cross-harness-comms@comms".mcp_servers.comms.tools.comms_send]\napproval_mode = "approve"\n';
 
 // Appends the approval section to Codex's config unless its table is already there, leaving the rest untouched.
 async function allowCodexReplies(io: CommandIO, platform: Platform): Promise<void> {
@@ -156,13 +157,16 @@ export async function runCli(argv: readonly string[], io: CommandIO, runtime: Cl
     if (command === "session-start" || command === "session-end") return await codexHook(await readInput(io), codexHost(runtime));
     if (command === "install") {
       if (argv[1] === "pi") return await installPi(io, runtime);
+      // The published install: the `release` branch marketplace, then the plugin from it.
       const instructions: Record<string, string> = {
-        claude: "Add the built dist marketplace with Claude Code's plugin manager, then install cross-harness-comms@comms-local.",
-        codex: "Add the built local marketplace, then run codex plugin add cross-harness-comms@comms-local and trust its SessionStart hook.",
+        claude: "Install comms from its published release:\n\n"
+          + "  claude plugin marketplace add esmoradian/cross-harness-comms#release\n  claude plugin install cross-harness-comms@comms\n",
+        codex: "Install comms from its published release, then trust its SessionStart hook:\n\n"
+          + "  codex plugin marketplace add esmoradian/cross-harness-comms --ref release\n  codex plugin add cross-harness-comms@comms\n",
       };
       if (!argv[1] || !instructions[argv[1]]) throw new Error("Supported integrations: pi, claude, codex");
       if (argv[1] === "codex" && argv[2] === "--allow-replies") { await allowCodexReplies(io, runtime.platform); return 0; }
-      io.stdout(instructions[argv[1]] + "\nKeep the compiled comms binary on PATH for local development.\n");
+      io.stdout(instructions[argv[1]]!);
       if (argv[1] === "codex") io.stdout("\nCodex's automatic review asks you before each reply to another agent. To let agents reply through comms\n"
         + "without review, add this to ~/.codex/config.toml, or run comms install codex --allow-replies:\n\n" + CODEX_APPROVAL);
       return 0;

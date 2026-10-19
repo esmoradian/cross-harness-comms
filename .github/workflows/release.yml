@@ -1,0 +1,58 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+
+      - name: Check the tag matches RELEASE_VERSION
+        id: version
+        run: |
+          version=$(bun -e 'import { RELEASE_VERSION } from "@cross-harness-comms/protocol"; console.log(RELEASE_VERSION)')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match RELEASE_VERSION $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - run: bun scripts/build.ts release
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/release/assets/* --verify-tag --generate-notes
+
+      # Only after the assets are uploaded, so every launcher on the branch can download its core.
+      - name: Publish the release branch
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TREE: ${{ runner.temp }}/release-tree
+        run: |
+          if git rev-parse --verify --quiet refs/remotes/origin/release >/dev/null; then
+            git worktree add -B release "$TREE" origin/release
+          else
+            git worktree add --orphan -b release "$TREE"
+          fi
+          find "$TREE" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R dist/release/tree/. "$TREE/"
+          git -C "$TREE" add -A
+          git -C "$TREE" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "release $VERSION"
+          git -C "$TREE" push origin release

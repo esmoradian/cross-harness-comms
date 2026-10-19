@@ -1,5 +1,5 @@
 // The release version of the core, CLI, and plugins; `comms ensure` replaces only an older core.
-export const RELEASE_VERSION = "0.1.29";
+export const RELEASE_VERSION = "0.2.0";
 export type Harness = "pi" | "claude" | "codex";
 
 export interface SessionRegistration {

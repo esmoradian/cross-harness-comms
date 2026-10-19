@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, unlink, chmod, copyFile, rename, lstat } from "node:fs/promises";
+import { mkdir, open, readFile, unlink, chmod, copyFile, rename, lstat, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
@@ -48,7 +48,25 @@ async function probe(runtime: CliRuntime) {
     ]);
   } finally { await client.close(); }
 }
+// Removes old launcher downloads under `<data>/releases/`, keeping `current` and the two newest other plain versions.
+// Anything else there is left alone, and a failure only leaves files behind, so it never throws.
+export async function pruneReleases(dataDirectory: string, current: string): Promise<void> {
+  try {
+    const releases = join(dataDirectory, "releases");
+    const versions = (await readdir(releases, { withFileTypes: true }))
+      .filter(entry => entry.isDirectory() && /^\d+\.\d+\.\d+$/.test(entry.name) && entry.name !== current)
+      .map(entry => entry.name).sort((a, b) => compareVersions(b, a));
+    await Promise.all(versions.slice(2).map(version => rm(join(releases, version), { recursive: true, force: true }).catch(() => {})));
+  } catch {}
+}
+
 export async function ensure(runtime: CliRuntime): Promise<string> {
+  const address = await start(runtime);
+  if (runtime.compiled) await pruneReleases(runtime.platform.dataDirectory(), CORE_VERSION);
+  return address;
+}
+
+async function start(runtime: CliRuntime): Promise<string> {
   // Injected transports need no installation or process creation.
   if (!runtime.command) { await probe(runtime); return runtime.platform.socketAddress(); }
   const path = await directory(runtime);
