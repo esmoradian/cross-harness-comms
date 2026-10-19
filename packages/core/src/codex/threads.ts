@@ -13,7 +13,7 @@ const spawn: Run = async argv => {
 
 type Lifecycle = { executable: string; runtime_state: CodexRuntimeState; ended: number; ended_at: number | null; daemon_owned: number };
 
-// Codex threads: their start and end from hooks and from the app-server daemon's events (ADR-015, ADR-019),
+// Codex threads: their start and end from hooks and from the app-server daemon's events,
 // and delivery through `codex queue`.
 export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncIterable<CodexEvent>) {
   const { store } = ctx, { db } = store;
@@ -28,7 +28,7 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
     db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent);
     if (wasOnline) store.seen(agent, ctx.now());
   });
-  // The Codex MCP server acts for whichever online thread its call names (ADR-014).
+  // The Codex MCP server acts for whichever online thread its call names.
   const sender = (thread: string) => {
     const agent = store.agentBySession("codex", thread);
     if (!agent || !store.codexThread(agent.id)) throw failure("UNKNOWN_SESSION", "Codex thread has not started a comms session");

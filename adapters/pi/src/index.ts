@@ -7,7 +7,7 @@ import { renderCommsMessage } from "./card.ts";
 import type { AdapterHandle, AdapterRuntime } from "@cross-harness-comms/client";
 import type { Component } from "@earendil-works/pi-tui";
 
-// Structural subset of Pi 0.85.1 extension types. See tests/SOURCES.md.
+// Structural subset of Pi 0.85.1 extension types.
 export interface PiContext {
   cwd: string;
   sessionManager: { getSessionId(): string };
@@ -46,7 +46,7 @@ export interface PiMessageRenderOptions {
 }
 export type PiMessageRenderer = (message: PiCustomMessage, options: PiMessageRenderOptions, theme: PiTheme) => Component | undefined;
 
-// The `details` of a `comms_message`, which the card renders (ADR-017).
+// The `details` of a `comms_message`, which the card renders.
 export interface CommsMessageDetails {
   // The sender's `comms:` address, and `name` is that address without `comms:`.
   from: string;
@@ -84,7 +84,7 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
       const { message, from, harness } = delivery;
       const name = addressName(from), cwd = delivery.cwd ?? "";
       const details: CommsMessageDetails = { from, name, harness, cwd, id: message.id, ...(message.reply_to ? { reply_to: message.reply_to } : {}), body: message.body };
-      // Pi Intercom's Markdown, without a tag or authority note; the card draws `details` (ADR-017).
+      // Pi Intercom's Markdown, without a tag or authority note; the card draws `details`.
       const replies = message.reply_to ? ` This replies to \`${message.reply_to}\`.` : "";
       const content = `**From ${name}** (${harness} · ${cwd})\nReply with comms_send to \`${from}\` with reply_to \`${message.id}\`.${replies}\n\n${message.body}`;
       // Starts a turn when Pi is idle and steers a busy session.
@@ -93,7 +93,7 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
     await followSessionName(ctx);
   });
   pi.on("session_shutdown", close);
-  // The Pi session name, normalized, is this session's chosen comms name (HANDOFF-PI-LIVE-SUBAGENTS).
+  // The Pi session name, normalized, is this session's chosen comms name.
   const followSessionName = async (ctx: PiCommandContext) => {
     const name = normalizeName(pi.getSessionName() ?? "");
     if (!name || !session || ctx.sessionManager.getSessionId() !== nativeId) return;

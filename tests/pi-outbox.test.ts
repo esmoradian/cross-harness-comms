@@ -5,7 +5,7 @@ import { FakePi } from "./support/fakes/pi.ts";
 import { eventually, settle, uuid } from "./support/helpers.ts";
 import { registration, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 
-// HANDOFF-PI-LIVE-SUBAGENTS: an event-bus send API in Pi mirroring Pi Intercom 0.13.0's outbox v1. The Pi adapter listens on
+// An event-bus send API in Pi mirroring Pi Intercom 0.13.0's outbox v1. The Pi adapter listens on
 // `pi.events` for `comms:outbox-request` `{ version: 1, requestId, extensionId, extensionName, to, message }` and answers once
 // on `comms:outbox-result` `{ version: 1, requestId, status, code?, extensionId, extensionName, messageId?, detail? }`, sending
 // as this session's agent with no confirmation. `sent` covers delivered and queued (which `detail` says); `blocked` is

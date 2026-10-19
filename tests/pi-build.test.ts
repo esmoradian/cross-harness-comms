@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPiExtension } from "../scripts/build.ts";
 
-// ADR-017: the built Pi extension imports @earendil-works/pi-tui from the copy Pi provides instead of bundling it.
+// The built Pi extension imports @earendil-works/pi-tui from the copy Pi provides instead of bundling it.
 
 test("the built pi extension keeps @earendil-works/pi-tui as an external import", async () => {
   const directory = mkdtempSync(join(tmpdir(), "comms-pi-build-"));

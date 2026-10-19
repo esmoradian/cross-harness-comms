@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 
-// HANDOFF-PI-LIVE-SUBAGENTS: `comms install pi` copies the built Pi package, `plugins/pi` beside the compiled binary (as
+// `comms install pi` copies the built Pi package, `plugins/pi` beside the compiled binary (as
 // `dist/comms` sits beside `dist/plugins/pi`), to `<data directory>/pi/<version>/`, where the version is the copied
 // package's own `package.json` version; it points the symlink `<data directory>/pi/current` at it atomically, keeps the two
 // newest versions and deletes older ones, and prints the `current` path to put in Pi's settings `packages`.

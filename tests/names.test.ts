@@ -9,7 +9,7 @@ import { attachToken } from "./support/claude.ts";
 import { eventually, uuid, type Peer } from "./support/helpers.ts";
 import { cli, helloRequests, registration, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 
-// NAMING-DESIGN.md and HANDOFF-NAMES.md: a chosen name is the agent's one comms name, set from inside its session.
+// A chosen name is the agent's one comms name, set from inside its session.
 // `name { token? | codex_thread?, name }` renames the caller and marks it chosen (`agents.name_chosen`). An online holder
 // refuses with NAME_TAKEN naming its harness and folder; an offline holder falls back to a generated name, the way
 // registration picks one, and keeps its mail. A Claude /clear hello names the identity it replaces (`replaces`, that
@@ -82,7 +82,7 @@ test("names: COMMS_TOOLS describes comms_name's name with the slash the name rul
   expect(nameTool.inputSchema.properties.name.description).toMatch(/slash|`\/`|"\/"/);
 });
 
-// HANDOFF-PI-LIVE-SUBAGENTS: names may contain `/`, so Pi session names such as `<group>/<tab label>` can be comms names.
+// Names may contain `/`, so Pi session names such as `<group>/<tab label>` can be comms names.
 // The rule is 1 to 64 of lowercase letters, digits, `.`, `_`, `-`, and `/`, not starting or ending with `/`, and not UUID-like.
 
 const SLASH_NAMES = ["misc/w1", "a/b/c", "misc/my-worker.v2_x", `${"a".repeat(31)}/${"b".repeat(32)}`];
@@ -318,7 +318,7 @@ test("names: Claude's model sets its name with comms_name, and a refusal is deni
   await withRig(async rig => {
     const claude = await rig.harness("claude");
     const fake = claude.fake as FakeClaude;
-    // A plain string, the shape Claude Code accepts for a registered tool (HANDOFF-FIXES-3 fix 1).
+    // A plain string, the shape Claude Code accepts for a registered tool.
     expect(await claudeName(fake, "planner")).toEqual({ result: expect.stringContaining("comms:planner") });
     expect((await named(rig, claude.agent.id)).name).toBe("planner");
     const holder = await rig.harness("pi", undefined, "/projects/review-desk");
@@ -542,7 +542,7 @@ test("names: a sender named with `/` is shown by that name, and every harness re
   });
 });
 
-// Plain names (HANDOFF-FIXES-3 fix 2): the core takes an address without a scheme as a comms name or ID, so Pi and Codex
+// Plain names: the core takes an address without a scheme as a comms name or ID, so Pi and Codex
 // reach the names their lists and message headers show. Any other scheme still fails, and an unknown address is named in the error.
 
 // What a refused comms_send told the model: Pi throws the core's error, and Codex answers an error result with its message.

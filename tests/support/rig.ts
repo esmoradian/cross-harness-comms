@@ -58,7 +58,7 @@ export class Rig {
   private core: Core | undefined;
   private observer: Peer | undefined;
 
-  // `now` is the core's clock for activity times in epoch milliseconds (ADR-018), passed structurally
+  // `now` is the core's clock for activity times in epoch milliseconds, passed structurally
   // until the implementation adds it to the core's public type.
   constructor(readonly protocol?: VersionPolicy, readonly coreOptions: {
     pingTimeoutMs?: number; nativeAckMs?: number;

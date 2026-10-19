@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { CLAUDE_INBOX_VERSIONS, CLAUDE_NATIVE_MIN_VERSION, formatClaudeInboxLine, parseClaudeInboxLine } from "@cross-harness-comms/protocol";
 
-// Observed in Claude Code 2.1.289 on 2026-10-17 (internal/HANDOFF-CLAUDE-INBOX.md), sent by a probe plugin.
+// Observed in Claude Code 2.1.289 on 2026-10-17, sent by a probe plugin.
 const observed = String.raw`{"msgV":1,"msg_id":"91d91eeb-2ba4-459a-b1c6-7ab9382d3a2f","type":"user","message":{"role":"user","content":"<cross-session-message from=\"uds:/tmp/cc-socks/96819.sock\" from-name=\"Cross-harness communications naming\" from-mode=\"prompting\">\nprobe send from plugin\n</cross-session-message>"},"priority":"next","from":"uds:/tmp/cc-socks/96819.sock","from_plugin":"comms-inbox-probe"}`;
 
 test("claude inbox: formatting writes exactly the observed line, stamped as cross-harness-comms", () => {

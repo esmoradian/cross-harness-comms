@@ -12,7 +12,7 @@ import { peerSessions, runsOf } from "./support/claude.ts";
 import { eventually, uuid, type Peer } from "./support/helpers.ts";
 import { cli, registration, withRig, type Rig } from "./support/rig.ts";
 
-// HANDOFF-PRESENCE: every listed agent carries `presence`, computed from the core's injected clock when
+// Every listed agent carries `presence`, computed from the core's injected clock when
 // `list` or `resolve` answers. `offline` is not online; `active` is online with `active_at` within the
 // threshold; `idle` is online with `active_at` older. The threshold is 1800 seconds for Claude and Pi, and
 // for Codex the daemon's `thread_unload_delay_secs` from `config/read` on the observer's latest connection,
@@ -188,7 +188,7 @@ test("presence: a snapshot whose config/read failed uses 1800 seconds, also afte
 });
 
 // The daemon side: `config/read` on each connection, reported on that connection's snapshot. Shapes are
-// `ConfigReadParams` and `ConfigReadResponse` from `codex app-server generate-ts`; see tests/SOURCES.md.
+// `ConfigReadParams` and `ConfigReadResponse` from `codex app-server generate-ts`.
 test("codex daemon client: each connection reads the unload delay with config/read and reports it on its snapshot", async () => {
   let config: () => unknown = () => ({ config: { model: null, thread_unload_delay_secs: 900 }, origins: {}, layers: null });
   const daemon = fakeCodexDaemon(request => request.method === "thread/loaded/list" ? { data: [], nextCursor: null } : {},
@@ -416,7 +416,7 @@ test("comms_list takes an optional all boolean", () => {
   expect((list.inputSchema as unknown as { required?: string[] }).required ?? []).not.toContain("all");
 });
 
-// HANDOFF-STALE-FIX: `last_seen`, and the activity derived from it, change only when an agent goes from online
+// `last_seen`, and the activity derived from it, change only when an agent goes from online
 // to offline or comes online. A daemon-owned Codex agent already offline keeps its `last_seen` through any later
 // end, snapshot, disconnect, or core restart, so it reaches the one-day stale rule.
 

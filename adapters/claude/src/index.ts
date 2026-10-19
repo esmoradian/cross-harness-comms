@@ -103,7 +103,7 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: Options): 
   const session = { harness: "claude", session_key: state.sessionId, cwd: await $.session.cwd(), host: options.host };
   // Mods get no CLAUDE_PLUGIN_ROOT; $.plugin.root is the plugin's directory.
   if (state.binary === "comms") state.binary = `${$.plugin.root}/bin/comms`;
-  // Claude's inbox socket, which the core writes native peer lines to (ADR-016).
+  // Claude's inbox socket, which the core writes native peer lines to.
   const inbox = await $.env!.get("CLAUDE_CODE_MESSAGING_SOCKET");
   owned();
   state.nativePeers = !!inbox;
@@ -180,7 +180,7 @@ async function ensureClaude($: ClaudeAPI, state: ClaudeState, options: Options):
   finally { if (state.connecting === connecting) state.connecting = undefined; }
 }
 
-// Claude draws a SendMessage row from `display` alone, and the model reads `message` (SEND-NAME-FINDINGS.md),
+// Claude draws a SendMessage row from `display` alone, and the model reads `message`,
 // so name the recipient in the UI and describe submission without claiming whether the peer has read it.
 function named(native: ToolResult, address: string, name: string): ToolResult {
   const result = "result" in native ? native.result as { display?: unknown; success?: unknown } | null : null;

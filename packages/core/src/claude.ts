@@ -13,7 +13,7 @@ const anyUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const replyPath = (directory: string, agent: string) =>
   `${directory}/9${String(parseInt(createHash("sha256").update(agent).digest("hex").slice(0, 12), 16) % 1e9).padStart(9, "0")}.sock`;
 
-// The native Claude route (ADR-016): messages written to a Claude session's inbox socket, and replies read
+// The native Claude route: messages written to a Claude session's inbox socket, and replies read
 // from a reply socket per non-Claude agent, falling back to `deliver` packets.
 export function claudeRoute(ctx: Context, nativeAckMs: number) {
   const { store, live } = ctx;

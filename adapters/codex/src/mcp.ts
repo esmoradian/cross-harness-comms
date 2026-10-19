@@ -8,7 +8,7 @@ export interface CodexHost extends Pick<AdapterRuntime, "ensure" | "connect"> {
   processExecutable(pid: number): Promise<string | undefined>;
 }
 
-// Codex hooks: SessionStart marks the thread online, SessionEnd marks it offline (ADR-014).
+// Codex hooks: SessionStart marks the thread online, SessionEnd marks it offline.
 export async function codexHook(hookInput: Record<string, unknown>, host: CodexHost): Promise<number> {
   const input = hookInput as unknown as SessionStartInput | SessionEndInput;
   if (!["SessionStart", "SessionEnd"].includes(input.hook_event_name) || !input.session_id || !input.cwd) throw new Error("Invalid Codex hook input");

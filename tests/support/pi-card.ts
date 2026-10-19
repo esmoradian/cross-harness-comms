@@ -4,7 +4,7 @@ import type { CommsMessageDetails, PiAPI, PiTheme } from "../../adapters/pi/src/
 import type { FakePi } from "./fakes/pi.ts";
 import { withRig } from "./rig.ts";
 
-// The model-facing Markdown of a `comms_message` (ADR-017).
+// The model-facing Markdown of a `comms_message`.
 export function expectedContent(details: Omit<CommsMessageDetails, "from">): string {
   const replies = details.reply_to ? ` This replies to \`${details.reply_to}\`.` : "";
   return `**From ${details.name}** (${details.harness} · ${details.cwd})\n`

@@ -8,7 +8,7 @@ import { attachToken, claudeAddress, claudeLine, inboxLine, nativeClaude, peerSe
 import { sendRequests, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 
 // Claude draws a SendMessage row from `display` in its own result, and the model never sees it
-// (SEND-NAME-FINDINGS.md). The adapter also replaces the successful model-facing message with a submission receipt.
+//. The adapter also replaces the successful model-facing message with a submission receipt.
 
 function sendEvent(to: string, message: string): Extract<ToolEvent, { tool: "SendMessage" }> {
   return { tool: "SendMessage", tool_use_id: uuid(), to, message, summary: "Answer by name" };

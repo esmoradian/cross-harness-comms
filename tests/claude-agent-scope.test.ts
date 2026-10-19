@@ -5,7 +5,7 @@ import { withRig } from "./support/rig.ts";
 
 // Native model.fork passes tool.call an agentId absent from $.agent.list(), and
 // its downstream permission path refuses tools even though it inherits schemas.
-// Reproduced in real Claude Code 2.1.296, see tests/SOURCES.md.
+// Reproduced in real Claude Code 2.1.296.
 test("Claude internal forks cannot send comms messages under the main session's identity", async () => {
   await withRig(async rig => {
     const claude = await rig.harness("claude"), pi = await rig.harness("pi");

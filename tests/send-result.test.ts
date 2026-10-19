@@ -5,7 +5,7 @@ import type { McpResult } from "../adapters/codex/src/index.ts";
 import { eventually, uuid } from "./support/helpers.ts";
 import { registration, withRig, type HarnessSession, type Rig } from "./support/rig.ts";
 
-// ADR-018: the core fills the recipient's agent name into SendResult, additive under ADR-005, and every
+// The core fills the recipient's agent name into SendResult, additive within protocol version 1, and every
 // harness's send tool names the recipient instead of the message ID.
 
 const sent = (name: string) => `Sent to ${name}.`;

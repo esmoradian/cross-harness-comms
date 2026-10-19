@@ -7,7 +7,7 @@ import type { FakePi } from "./support/fakes/pi.ts";
 import { eventually, uuid } from "./support/helpers.ts";
 import { registration, withRig, type Rig } from "./support/rig.ts";
 
-// HANDOFF-PI-LIVE-SUBAGENTS, comms decisions: the Pi session name is the agent's chosen comms name, and lookups are forgiving.
+// The Pi session name is the agent's chosen comms name, and lookups are forgiving.
 // `normalizeName(text)` lowercases, turns every run of characters outside `[a-z0-9._/-]` into `-`, trims `-` and `/` from both
 // ends, and cuts to 64, returning undefined for an empty result. On `session_start` with a session name, and on every
 // `session_info_changed`, the Pi adapter calls the core's `name` with the normalized session name. `resolveAddress` tries an

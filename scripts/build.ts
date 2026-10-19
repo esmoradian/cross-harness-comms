@@ -13,7 +13,7 @@ async function copyManifest(source: string, output: string): Promise<void> {
 
 // Bundles the Pi extension into `outdir` as `index.js`.
 export async function buildPiExtension(outdir: string): Promise<void> {
-  // Pi provides pi-tui to extensions at runtime, so the card uses that copy (ADR-017).
+  // Pi provides pi-tui to extensions at runtime, so the card uses that copy.
   const build = await Bun.build({ entrypoints: [join(root, "adapters/pi/src/index.ts")], outdir, target: "node", format: "esm",
     external: ["@earendil-works/pi-tui"] });
   if (!build.success) throw new AggregateError(build.logs, "Pi build failed");

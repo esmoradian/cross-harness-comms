@@ -11,8 +11,8 @@ import { withRig, type HarnessSession } from "./support/rig.ts";
 
 const harnesses: Harness[] = ["pi", "claude", "codex"];
 
-// Pi shows its own Markdown `comms_message` (ADR-017); Codex and Claude on the comms route get
-// Claude-style text naming their own send tool (ADR-018).
+// Pi shows its own Markdown `comms_message`; Codex and Claude on the comms route get
+// Claude-style text naming their own send tool.
 function expectedText(receiver: HarnessSession, sender: HarnessSession, message: Message) {
   const fields = { name: sender.agent.name, id: message.id, body: message.body, ...(message.reply_to ? { reply_to: message.reply_to } : {}) };
   if (receiver.fake instanceof FakeClaude) return expectedClaudeText(fields);
@@ -42,7 +42,7 @@ export function assertNonUserDelivery(session: HarnessSession) {
 
 for (const from of harnesses) for (const to of harnesses) {
   if (from === "claude" && to === "claude") continue;
-  test(`pair ${from} -> ${to}: tool sends and replies through core (invariants 7, 9, ADR-018)`, async () => {
+  test(`pair ${from} -> ${to}: tool sends and replies through core`, async () => {
     await withRig(async rig => {
       const sender = await rig.harness(from);
       const receiver = await rig.harness(to);
@@ -70,7 +70,7 @@ for (const from of harnesses) for (const to of harnesses) {
       expect(sender.incoming()[0]).toBe(expectedText(sender, receiver, reply));
       await rig.state(reply.id, "acked");
 
-      // Replies are ordinary messages and can themselves be replied to (ADR-007).
+      // Replies are ordinary messages and can themselves be replied to.
       await sender.send(`comms:${receiver.agent.name}`, "Thanks, one follow-up.", reply.id);
       await eventually(receiver.incoming, texts => expect(texts).toHaveLength(2));
       const followUp = rig.rows()[2]!;

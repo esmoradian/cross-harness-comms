@@ -14,7 +14,7 @@ type ReceiveHandler = ($: ClaudeAPI, event: SessionReceiveInput, next: (event: S
 // What Claude Code 2.1.289's $.session.version() resolved in a real session on 2026-10-17.
 export const CLAUDE_VERSION: SessionVersion = { version: "2.1.289", base: "2.1.289", builtAt: "2026-10-03T19:21:39Z" };
 
-// Claude Code 2.1.296's own result for a SendMessage that reached a `uds:` address (SEND-NAME-FINDINGS.md):
+// Claude Code 2.1.296's own result for a SendMessage that reached a `uds:` address:
 // the transcript row draws `display`, and the model reads the rest. `message` is shortened after `;`.
 export function claudeSendResult(to: string, message: string, msg_id = crypto.randomUUID()): ToolResult {
   return { result: { success: true, message: `“${message}” → ${to}; in that session's inbox, not yet read by its Claude`, display: `“${message}” → ${to}`, msg_id } };

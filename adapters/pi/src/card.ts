@@ -1,4 +1,4 @@
-// The card Pi draws for a `comms_message` (ADR-017), adapted from Pi Intercom 0.13.0's
+// The card Pi draws for a `comms_message`, adapted from Pi Intercom 0.13.0's
 // `ui/inline-message.ts` (InlineMessageComponent).
 //
 // MIT License

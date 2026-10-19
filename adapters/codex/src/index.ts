@@ -29,7 +29,7 @@ export interface CodexAdapter {
 
 // One MCP server serves every Codex thread in its process, so it holds no session:
 // presence comes from native lifecycle events and hooks, delivery from the core, and each call acts as
-// the thread its `_meta` names (ADR-014).
+// the thread its `_meta` names.
 export function createCodexAdapter(runtime: AdapterRuntime): CodexAdapter {
   let client: Promise<CommsClient> | undefined;
   let closed = false;

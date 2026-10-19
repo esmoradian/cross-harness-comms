@@ -84,7 +84,7 @@ const COMMANDS: Record<string, [RequestMethod, Params]> = {
   status: ["status", async () => ({})],
 };
 
-// Codex's standing authorization for comms replies, which its automatic review otherwise rejects (ADR-018).
+// Codex's standing authorization for comms replies, which its automatic review otherwise rejects.
 const CODEX_APPROVAL = '[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]\napproval_mode = "approve"\n';
 
 // Appends the approval section to Codex's config unless its table is already there, leaving the rest untouched.
@@ -99,7 +99,7 @@ async function allowCodexReplies(io: CommandIO, platform: Platform): Promise<voi
 }
 
 // Copies `plugins/pi` beside this binary to `<data>/pi/<version>`, points `<data>/pi/current` at it, and keeps it and the
-// newest other version (HANDOFF-PI-LIVE-SUBAGENTS). Same-version replacements also retain recent fallback copies.
+// newest other version. Same-version replacements also retain recent fallback copies.
 async function installPi(io: CommandIO, runtime: CliRuntime): Promise<number> {
   const source = join(dirname(runtime.command?.[0] ?? process.execPath), "plugins", "pi");
   const version = await readFile(join(source, "package.json"), "utf8").then(text => (JSON.parse(text) as { version?: unknown }).version, () => undefined);

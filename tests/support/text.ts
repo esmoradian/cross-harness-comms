@@ -1,4 +1,4 @@
-// The text Codex, and Claude on the comms fallback route, receive for an incoming message (ADR-018).
+// The text Codex, and Claude on the comms fallback route, receive for an incoming message.
 // `name` is the sender's comms name, its address without `comms:`.
 
 export function expectedCodexText(fields: { name: string; id: string; body: string; reply_to?: string | null }): string {

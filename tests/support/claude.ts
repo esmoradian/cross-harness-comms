@@ -95,7 +95,7 @@ export function runsOf(fake: FakeClaude, command: string) {
 // Claude Code's native ListAgents output when its own peer messaging is on.
 export const peerSessions = "This session is Cross-harness communications naming [2a1458] ...\n\nPeer sessions (1):\n  comms-test-8b [c14715]  ·  interactive  ·  idle  ·  started 45m ago";
 
-// A Claude session whose native route is on: an inbox socket and, unless `version` says otherwise, a tested Claude version (ADR-016).
+// A Claude session whose native route is on: an inbox socket and, unless `version` says otherwise, a tested Claude version.
 export async function nativeClaude(rig: Rig, options: NativeClaudeOptions = {}) {
   const session = await rig.harness("claude", undefined, undefined, { claude: options });
   return { session, fake: session.fake as FakeClaude };

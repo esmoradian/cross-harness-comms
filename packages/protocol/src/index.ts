@@ -14,11 +14,11 @@ export interface Agent extends SessionRegistration {
   name: string;
   last_seen: string;
   online: boolean;
-  // Present in `list` for a non-Claude agent when the caller is a Claude session on the native route (ADR-016).
+  // Present in `list` for a non-Claude agent when the caller is a Claude session on the native route.
   claude_address?: string;
-  // The agent's last activity, an ISO 8601 time, in every `list` result; optional because it was added within version 1 (ADR-005, ADR-018).
+  // The agent's last activity, an ISO 8601 time, in every `list` result; optional because it was added within version 1.
   active_at?: string;
-  // Computed when `list` or `resolve` answers; `online` means it is not "offline"; optional because it was added within version 1 (ADR-005).
+  // Computed when `list` or `resolve` answers; `online` means it is not "offline"; optional because it was added within version 1.
   presence?: "active" | "idle" | "offline";
 }
 
@@ -36,7 +36,7 @@ export interface Delivery {
   message: Message;
   from: string;
   harness: Harness;
-  // The sender's working directory from its agent record; optional because it was added within version 1 (ADR-005, ADR-017).
+  // The sender's working directory from its agent record; optional because it was added within version 1.
   cwd?: string;
 }
 
@@ -46,10 +46,10 @@ export interface HelloParams {
   token?: string;
   // Absent for a one-shot CLI connection negotiating before token-authenticated commands.
   session?: SessionRegistration;
-  // A Claude session's inbox socket and engine version, for the native inbox route (ADR-016).
+  // A Claude session's inbox socket and engine version, for the native inbox route.
   claude?: { inbox: string; version: string };
   // The token of the identity this session replaces, which Claude's adapter sends after /clear; the core moves that
-  // identity's chosen name to a newly created one when it is offline on the same harness and host (ADR-005, additive).
+  // identity's chosen name to a newly created one when it is offline on the same harness and host (additive within version 1).
   replaces?: string;
 }
 export interface HelloResult {
@@ -59,7 +59,7 @@ export interface HelloResult {
   notice?: string;
 }
 export interface SendParams {
-  // Either a session token, or an online Codex thread when sent by the Codex MCP server (ADR-014).
+  // Either a session token, or an online Codex thread when sent by the Codex MCP server.
   token?: string;
   codex_thread?: string;
   id: string;
@@ -71,7 +71,7 @@ export interface SendResult {
   id: string;
   state: "queued" | "delivered" | "acked";
   notice?: string;
-  // The recipient's agent name and presence; optional because they were added within version 1 (ADR-005, ADR-018).
+  // The recipient's agent name and presence; optional because they were added within version 1.
   name?: string;
   online?: boolean;
 }
@@ -81,7 +81,7 @@ export interface MethodTable {
   detach: { params: { token: string }; result: { ok: true } };
   rename: { params: { address: string; name: string }; result: Agent };
   // Sets the caller's own name and marks it chosen; an offline holder of the name falls back to a generated one,
-  // and an online holder refuses with NAME_TAKEN (ADR-005, additive).
+  // and an online holder refuses with NAME_TAKEN (additive within version 1).
   name: { params: { token?: string; codex_thread?: string; name: string }; result: Agent };
   inspect: { params: { id: string }; result: Message };
   status: { params: Record<string, never>; result: { version: string; protocol: number } };
@@ -91,13 +91,13 @@ export interface MethodTable {
   send: { params: SendParams; result: SendResult };
   deliver: { params: Delivery; result: never };
   ack: { params: { token: string; id: string }; result: { id: string; state: "acked" } };
-  // A Claude session acknowledging the native inbox line sent from the reply socket `from` (ADR-016).
+  // A Claude session acknowledging the native inbox line sent from the reply socket `from`.
   native_ack: { params: { token: string; from: string }; result: { id: string } };
   // `include_stale` also returns agents offline for more than a day, and `hidden` counts those left out, of which
-  // `hidden_claude` are Claude agents (ADR-005, additive).
+  // `hidden_claude` are Claude agents (additive within version 1).
   list: { params: { token?: string; include_stale?: boolean }; result: { agents: Agent[]; notice?: string; hidden?: number; hidden_claude?: number } };
   // The one agent whose name is exactly `name`, with the fields `list` gives the caller, or null;
-  // `skip_claude` answers null for a Claude agent (ADR-005, additive).
+  // `skip_claude` answers null for a Claude agent (additive within version 1).
   resolve: { params: { token?: string; name: string; skip_claude?: boolean }; result: { agent: Agent | null } };
 }
 export type RequestMethod = Exclude<keyof MethodTable, "deliver">;
@@ -123,7 +123,7 @@ export interface VersionPolicy {
   steps: readonly ConversionStep[];
 }
 
-// Claude-style text for harnesses that show messages as plain text (ADR-018). Codex replies with
+// Claude-style text for harnesses that show messages as plain text. Codex replies with
 // comms_send and reply_to; Claude's adapter fills in reply_to for its SendMessage.
 export function formatMessage(delivery: Delivery, receiver: "codex" | "claude"): string {
   const { message, from } = delivery;
@@ -162,7 +162,7 @@ export function normalizeName(text: string): string | undefined {
 }
 
 
-// Claude Code's peer-message inbox line (ADR-016). The formats we speak are compiled in.
+// Claude Code's peer-message inbox line. The formats we speak are compiled in.
 export const CLAUDE_INBOX_VERSIONS: readonly number[] = [1];
 export const CLAUDE_NATIVE_MIN_VERSION = "2.1.289";
 
@@ -260,7 +260,7 @@ export const COMMS_TOOLS = [
 // What comms_list returns: each agent with the address to send it to.
 export const listedAgents = (agents: readonly Agent[]) => agents.map(agent => ({ ...agent, address: `comms:${agent.name}` }));
 
-// An agent's last activity relative to `time`, in whole units: `last active now`, then minutes, hours, and days (ADR-018).
+// An agent's last activity relative to `time`, in whole units: `last active now`, then minutes, hours, and days.
 export function activeAgo(agent: Agent, time: number): string {
   const minutes = Math.floor((time - Date.parse(agent.active_at ?? agent.last_seen)) / 60_000);
   if (minutes < 1) return "last active now";

@@ -13,7 +13,7 @@ import { attachToken, claudeAddress, claudeLine, inboxLine, listWithToken, nativ
 // for Claude's inbox and the core's reply sockets. The fake inbox runs session.receive like Claude.
 
 // The text a message gets on the comms path, from the stored row: Claude's fallback text,
-// or Codex's when Codex receives it (ADR-018).
+// or Codex's when Codex receives it.
 function wrapper(rig: Rig, sender: HarnessSession, id: string, receiver: Harness = "claude") {
   const message = rig.rows().find(row => row.id === id)! as Message;
   const fields = { name: sender.agent.name, id: message.id, body: message.body, reply_to: message.reply_to ?? null };
@@ -160,7 +160,7 @@ for (const to of ["codex", "pi"] as Harness[]) {
         await eventually(agent.incoming, texts => expect(texts).toHaveLength(count + 1));
         const row = rig.rows().find(r => r.id === msg_id)!;
         expect(row).toMatchObject({ sender: claude.agent.id, recipient: agent.agent.id, body });
-        // Pi shows the comms card's Markdown (ADR-017); Codex gets its Claude-style text (ADR-018).
+        // Pi shows the comms card's Markdown; Codex gets its Claude-style text.
         expect(agent.incoming()[count]).toBe(agent.harness === "pi"
           ? expectedContent({ name: claude.agent.name, harness: "claude", cwd: claude.agent.cwd, id: msg_id, body, ...(row.reply_to ? { reply_to: row.reply_to } : {}) })
           : wrapper(rig, claude, msg_id, agent.harness));

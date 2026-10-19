@@ -6,7 +6,7 @@ import type { PiAPI, PiCommandContext, PiMessageRenderer, PiMessageRenderOptions
 export type FakePiEvent = "session_start" | "session_shutdown" | "session_info_changed";
 type Handler = (event: { type: string; reason?: string; name?: string | undefined }, ctx: PiCommandContext) => void | Promise<void>;
 
-// One entry of the fake's agent loop, in the order Pi would put it in the session (see SOURCES.md, Busy delivery).
+// One entry of the fake's agent loop, in the order Pi would put it in the session.
 export type TimelineEntry = { kind: "tool_start" | "tool_end"; tool: string } | { kind: "message"; customType: string };
 
 export class FakePi implements PiAPI {

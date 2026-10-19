@@ -10,7 +10,7 @@ import { FakeCodexEvents } from "./support/fakes/codex-events.ts";
 import { eventually, uuid } from "./support/helpers.ts";
 import { registration, withRig, type Rig } from "./support/rig.ts";
 
-// ADR-018: every agent carries `active_at`, the time of its last activity, kept in the core's memory.
+// Every agent carries `active_at`, the time of its last activity, kept in the core's memory.
 // The core sets it on register or reconnect, send, and ACK, and for a Codex thread also from the
 // daemon's native event activity time; it never moves backward, and until an agent is
 // active after a core start it falls back to `last_seen`. Times come from the core's injected clock.

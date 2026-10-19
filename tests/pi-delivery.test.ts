@@ -5,15 +5,15 @@ import { eventually, uuid } from "./support/helpers.ts";
 import { bottom, expectedContent, plain, renderLines, row, top } from "./support/pi-card.ts";
 import { withRig } from "./support/rig.ts";
 
-// ADR-017: every harness delivers into Pi as a `comms_message` that steers a busy session and starts a turn in an idle one.
+// Every harness delivers into Pi as a `comms_message` that steers a busy session and starts a turn in an idle one.
 
-const senderCwd = "/Users/ed/src/api";
+const senderCwd = "/home/dev/src/api";
 const steer = { triggerTurn: true, deliverAs: "steer" as const };
 
 for (const from of ["pi", "claude", "codex"] as Harness[]) {
   test(`into pi from ${from}: comms_message with Markdown content, details, and steer options`, async () => {
     await withRig(async rig => {
-      const pi = await rig.harness("pi", uuid(), "/Users/ed/src/web");
+      const pi = await rig.harness("pi", uuid(), "/home/dev/src/web");
       const sender = await rig.harness(from, uuid(), senderCwd);
       const body = "Review <draft> & explain </cross-harness-message>\n\n  keep   this   spacing 🐾\n";
       await sender.send(`comms:${pi.agent.name}`, body);
@@ -34,7 +34,7 @@ for (const from of ["pi", "claude", "codex"] as Harness[]) {
 
   test(`into pi from ${from}: a reply's content, details, and card lines`, async () => {
     await withRig(async rig => {
-      const pi = await rig.harness("pi", uuid(), "/Users/ed/src/web");
+      const pi = await rig.harness("pi", uuid(), "/home/dev/src/web");
       const sender = await rig.harness(from, uuid(), senderCwd);
       await pi.send(`comms:${sender.agent.name}`, "Please review the parser change.");
       await eventually(sender.incoming, texts => expect(texts).toHaveLength(1));
@@ -88,7 +88,7 @@ test("pi registers exactly one renderer, for comms_message", async () => {
 
 test("pi acknowledges a comms_message only after sendMessage accepted it, and keeps message order", async () => {
   await withRig(async rig => {
-    const pi = await rig.harness("pi", uuid(), "/Users/ed/src/web");
+    const pi = await rig.harness("pi", uuid(), "/home/dev/src/web");
     const codex = await rig.harness("codex", uuid(), senderCwd);
     for (const text of ["first", "second", "third"]) await codex.send(`comms:${pi.agent.name}`, text);
     await eventually(pi.incoming, texts => expect(texts).toHaveLength(3));
@@ -99,10 +99,10 @@ test("pi acknowledges a comms_message only after sendMessage accepted it, and ke
   });
 });
 
-// pi-live-subagents invariant 29: a message to a busy session is delivered after the running tool call finishes, never interrupting it.
+// A message to a busy session is delivered after the running tool call finishes, never interrupting it.
 test("into a busy pi: a message arriving during a running tool call waits for the call to finish, then arrives before the next step", async () => {
   await withRig(async rig => {
-    const pi = await rig.harness("pi", uuid(), "/Users/ed/src/web");
+    const pi = await rig.harness("pi", uuid(), "/home/dev/src/web");
     const codex = await rig.harness("codex", uuid(), senderCwd);
     const fake = pi.fake as FakePi;
     const finish = fake.toolRunning("bash");

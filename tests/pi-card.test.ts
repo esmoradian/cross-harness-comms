@@ -6,16 +6,16 @@ import type { CommsMessageDetails } from "../adapters/pi/src/index.ts";
 import { bottom, commsMessage, detailsFor, expectColor, expectMutedFrame, expectWidths, identityTheme, markerTheme, plain,
   rendererOf, renderLines, row, top, withPi } from "./support/pi-card.ts";
 
-// The ADR-017 card, rendered through the renderer the Pi adapter registers, as Pi calls it.
+// The comms card, rendered through the renderer the Pi adapter registers, as Pi calls it.
 
 const body = "Can you review the parser change in src/parse.ts before I merge it?\n\nThanks, codex.";
-const message = detailsFor({ name: "codex-api", harness: "codex", cwd: "/Users/ed/src/api", id: "019a2b3c-4d5e-7f60-8a7b-1c2d3e4f5a6b", body });
+const message = detailsFor({ name: "codex-api", harness: "codex", cwd: "/home/dev/src/api", id: "019a2b3c-4d5e-7f60-8a7b-1c2d3e4f5a6b", body });
 const reply = { ...message, reply_to: "019a2b3b-0000-7000-8000-000000000001" };
 
 test("pi card collapsed: exact lines at width 100", async () => {
   await withPi(fake => {
     expect(plain(renderLines(fake, commsMessage(message), 100))).toEqual([
-      top(" From: codex-api (codex · /Users/ed/src/api) ", 98),
+      top(" From: codex-api (codex · /home/dev/src/api) ", 98),
       row(" Can you review the parser change in src/parse.ts before I merge it? Thanks, codex.", 98),
       row(" To reply: comms_send to comms:codex-api · Ctrl+O to expand", 98),
       bottom(98),
@@ -26,7 +26,7 @@ test("pi card collapsed: exact lines at width 100", async () => {
 test("pi card collapsed reply: exact lines at width 100", async () => {
   await withPi(fake => {
     expect(plain(renderLines(fake, commsMessage(reply), 100))).toEqual([
-      top(" From: codex-api (codex · /Users/ed/src/api) ", 98),
+      top(" From: codex-api (codex · /home/dev/src/api) ", 98),
       row(" Can you review the parser change in src/parse.ts before I merge it? Thanks, codex.", 98),
       row(" To reply: comms_send to comms:codex-api · Reply to 019a2b3b · Ctrl+O to expand", 98),
       bottom(98),
@@ -37,7 +37,7 @@ test("pi card collapsed reply: exact lines at width 100", async () => {
 test("pi card expanded: exact lines at width 50, with the body wrapped to the inner width minus its one-space pad", async () => {
   await withPi(fake => {
     expect(plain(renderLines(fake, commsMessage(message), 50, { expanded: true }))).toEqual([
-      top(" From: codex-api (codex · /Users/ed/src/api) ", 48),
+      top(" From: codex-api (codex · /home/dev/src/api) ", 48),
       row(" Can you review the parser change in", 48),
       row(" src/parse.ts before I merge it?", 48),
       row("", 48),
@@ -52,7 +52,7 @@ test("pi card expanded: exact lines at width 50, with the body wrapped to the in
 test("pi card expanded reply: exact lines at width 50", async () => {
   await withPi(fake => {
     expect(plain(renderLines(fake, commsMessage(reply), 50, { expanded: true }))).toEqual([
-      top(" From: codex-api (codex · /Users/ed/src/api) ", 48),
+      top(" From: codex-api (codex · /home/dev/src/api) ", 48),
       row(" Can you review the parser change in", 48),
       row(" src/parse.ts before I merge it?", 48),
       row("", 48),
@@ -71,7 +71,7 @@ test("pi card collapsed colors: muted frame, toolTitle header, text preview, dim
     const lines = renderLines(fake, commsMessage(reply), 100, { theme: markerTheme });
     expect(lines).toHaveLength(4);
     for (const line of lines) expectMutedFrame(line);
-    expectColor(lines[0]!, " From: codex-api (codex · /Users/ed/src/api) ", "toolTitle");
+    expectColor(lines[0]!, " From: codex-api (codex · /home/dev/src/api) ", "toolTitle");
     expectColor(lines[1]!, "Can you review the parser change in src/parse.ts before I merge it? Thanks, codex.", "text");
     expectColor(lines[2]!, " To reply: comms_send to comms:codex-api · Reply to 019a2b3b · Ctrl+O to expand", "dim");
     expectWidths(lines, 100);
@@ -83,7 +83,7 @@ test("pi card expanded colors: muted frame, toolTitle header, text body, dim rep
     const lines = renderLines(fake, commsMessage(reply), 50, { expanded: true, theme: markerTheme });
     expect(lines).toHaveLength(10);
     for (const line of lines) expectMutedFrame(line);
-    expectColor(lines[0]!, " From: codex-api (codex · /Users/ed/src/api) ", "toolTitle");
+    expectColor(lines[0]!, " From: codex-api (codex · /home/dev/src/api) ", "toolTitle");
     expectColor(lines[1]!, "Can you review the parser change in", "text");
     expectColor(lines[2]!, "src/parse.ts before I merge it?", "text");
     expectColor(lines[4]!, "Thanks, codex.", "text");
@@ -103,9 +103,9 @@ const bodies: Record<string, string> = {
   empty: "",
 };
 const senders: Record<string, Omit<CommsMessageDetails, "body">> = {
-  short: { from: "comms:codex-api", name: "codex-api", harness: "codex", cwd: "/Users/ed/src/api", id: message.id },
+  short: { from: "comms:codex-api", name: "codex-api", harness: "codex", cwd: "/home/dev/src/api", id: message.id },
   long: { from: "comms:a-very-long-agent-name-that-goes-on-and-on", name: "a-very-long-agent-name-that-goes-on-and-on", harness: "claude",
-    cwd: `/Users/ed/プロジェクト/深い/${"nested/".repeat(10)}`, id: message.id, reply_to: reply.reply_to },
+    cwd: `/home/dev/プロジェクト/深い/${"nested/".repeat(10)}`, id: message.id, reply_to: reply.reply_to },
 };
 const widths = [...Array.from({ length: 38 }, (_, i) => i + 3), 42, 46, 47, 48, 49, 50, 60, 64, 80, 99, 100, 101, 120, 160, 300];
 const preview = (text: string) => text.replace(/\s+/g, " ").trim();
@@ -196,7 +196,7 @@ const malformed: [string, unknown][] = [
     return [`details without ${field}`, rest] as [string, unknown];
   }),
   ["a non-string name", { ...message, name: 7 }],
-  ["a non-string cwd", { ...message, cwd: { path: "/Users/ed/src/api" } }],
+  ["a non-string cwd", { ...message, cwd: { path: "/home/dev/src/api" } }],
   ["a non-string body", { ...message, body: null }],
   ["a non-string reply_to", { ...message, reply_to: 42 }],
 ];
@@ -205,7 +205,7 @@ test("pi renderer returns undefined for missing or malformed details, so Pi show
   await withPi(fake => {
     const renderer = rendererOf(fake);
     for (const [name, details] of malformed) for (const expanded of [false, true]) {
-      const sent = { customType: "comms_message", content: "**From codex-api** (codex · /Users/ed/src/api)", display: true,
+      const sent = { customType: "comms_message", content: "**From codex-api** (codex · /home/dev/src/api)", display: true,
         ...(details === undefined ? {} : { details }) };
       expect(renderer({ role: "custom", ...sent, timestamp: 1 }, { expanded, outputPad: 1 }, identityTheme), name).toBeUndefined();
     }

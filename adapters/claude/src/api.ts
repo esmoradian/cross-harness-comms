@@ -1,6 +1,6 @@
 // Manually maintained subset of Claude Code 2.1.289 generated mod types; `tool.register`, `command.register`, and
 // `command.run` are from the 2.1.296 generated types.
-// No Node imports: Claude mods run in the harness sandbox. See tests/SOURCES.md.
+// No Node imports: Claude mods run in the harness sandbox.
 export interface ProcessRunInit { cwd?: string; env?: Record<string, string>; stdin?: string; timeoutMs?: number }
 export interface ProcessRunResult {
   exitCode: number; stdout: string; stderr: string;

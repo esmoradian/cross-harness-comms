@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 
-// ADR-018: `comms install codex` offers the standing approval for the plugin's comms_send tool, and
+// `comms install codex` offers the standing approval for the plugin's comms_send tool, and
 // `--allow-replies` appends it to $CODEX_HOME/config.toml without touching the rest of the file.
 // Every test uses a temporary CODEX_HOME, through both the platform and the environment, so the real
 // ~/.codex is never read or written.
 
 const HEADER = '[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]';
 const SECTION = `${HEADER}\napproval_mode = "approve"`;
-// What `comms install codex` printed before ADR-018.
+// What `comms install codex` printed before it offered the standing approval.
 const CURRENT = "Add the built local marketplace, then run codex plugin add cross-harness-comms@comms-local and trust its SessionStart hook.\n"
   + "Keep the compiled comms binary on PATH for local development.\n";
 

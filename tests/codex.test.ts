@@ -4,7 +4,7 @@ import { FakeCodex } from "./support/fakes/codex.ts";
 import { eventually, uuid } from "./support/helpers.ts";
 import { withRig, type Rig } from "./support/rig.ts";
 
-// ADR-014: Codex presence comes from its hooks, the core delivers through
+// Codex presence comes from its hooks, the core delivers through
 // `codex queue`, and one MCP server acts for whichever thread `_meta` names.
 
 const online = async (rig: Rig, id: string) => (await rig.agents()).find(a => a.id === id)?.online;

@@ -7,7 +7,7 @@ import { claudeAddress, connectable, nativePeer, socketPath } from "./support/cl
 import { eventually, uuid } from "./support/helpers.ts";
 import { Rig, registration, withRig } from "./support/rig.ts";
 
-// HANDOFF-RETENTION: a sweep, at core start and whenever a registration creates a new agent, removes each agent that is
+// A sweep, at core start and whenever a registration creates a new agent, removes each agent that is
 // offline (no live connection, not an online Codex thread), has a generated name (`name_chosen = 0`), was last seen more
 // than 30 days ago on the core's clock, and has no `queued` or `delivered` message it sent to an agent that stays.
 // Removal takes every message to or from the agent, its `codex_threads` and `codex_lifecycle` rows, and clears `reply_to`

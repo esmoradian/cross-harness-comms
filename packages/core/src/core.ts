@@ -22,7 +22,7 @@ export interface Connection {
   requests: Promise<void>;
   closeAfterResponse?: boolean;
   pings: Map<string, (responsive: boolean) => void>;
-  // A Claude session's inbox socket, whether the native route is on, and its unacknowledged line (ADR-016).
+  // A Claude session's inbox socket, whether the native route is on, and its unacknowledged line.
   inbox?: string;
   native?: boolean;
   inflight?: { id: string; from: string; timer?: ReturnType<typeof setTimeout> };
@@ -76,7 +76,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
   const connections = new Set<Connection>();
   const live = new Map<string, Connection>();
   const registrations = new Map<string, Promise<unknown>>();
-  // Each agent's last activity in epoch milliseconds, kept in memory only; it never moves backward (ADR-018).
+  // Each agent's last activity in epoch milliseconds, kept in memory only; it never moves backward.
   const activity = new Map<string, number>();
   // An agent row with its presence and activity, as every listing shows it. A loaded Codex thread with no
   // activity for the daemon's unload delay has a window open, so that delay separates active from idle.
@@ -108,7 +108,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       })();
     }
   };
-  // Retention (HANDOFF-RETENTION): old offline agents are removed, and their names are held, for 30 days each.
+  // Retention: old offline agents are removed, and their names are held, for 30 days each.
   const retained = () => new Date(ctx.now() - 30 * 86_400_000).toISOString();
   const released = (name: string) => !!db.query("SELECT 1 FROM released_names WHERE name = ? AND released_at >= ?").get(name, retained());
   const refuseReleased = (name: string) => {
