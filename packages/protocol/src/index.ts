@@ -1,5 +1,5 @@
 // The release version of the core, CLI, and plugins; `comms ensure` replaces only an older core.
-export const RELEASE_VERSION = "0.1.22";
+export const RELEASE_VERSION = "0.1.23";
 export type Harness = "pi" | "claude" | "codex";
 
 export interface SessionRegistration {
@@ -233,12 +233,12 @@ export const COMMS_TOOLS = [
 // What comms_list returns: each agent with the address to send it to.
 export const listedAgents = (agents: readonly Agent[]) => agents.map(agent => ({ ...agent, address: `comms:${agent.name}` }));
 
-// An agent's last activity relative to `time`, in whole units: `active now`, then minutes, hours, and days (ADR-018).
+// An agent's last activity relative to `time`, in whole units: `last active now`, then minutes, hours, and days (ADR-018).
 export function activeAgo(agent: Agent, time: number): string {
   const minutes = Math.floor((time - Date.parse(agent.active_at ?? agent.last_seen)) / 60_000);
-  if (minutes < 1) return "active now";
-  if (minutes < 60) return `active ${minutes}m ago`;
-  return minutes < 1440 ? `active ${Math.floor(minutes / 60)}h ago` : `active ${Math.floor(minutes / 1440)}d ago`;
+  if (minutes < 1) return "last active now";
+  if (minutes < 60) return `last active ${minutes}m ago`;
+  return minutes < 1440 ? `last active ${Math.floor(minutes / 60)}h ago` : `last active ${Math.floor(minutes / 1440)}d ago`;
 }
 
 // The line agent-facing lists end with when `list` left out stale agents.

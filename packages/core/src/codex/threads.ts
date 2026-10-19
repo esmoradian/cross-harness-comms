@@ -64,8 +64,10 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
         ended = CASE WHEN excluded.ended = 1 THEN 1 ELSE codex_lifecycle.ended END,
         ended_at = CASE WHEN excluded.ended = 1 THEN excluded.ended_at ELSE codex_lifecycle.ended_at END`)
       .run(agent.id, state, ended ? 1 : 0, ended ? ctx.now() : null);
+    // Only going offline records last_seen; ending an agent already offline must not refresh it.
+    const wasOnline = onlineBeforeStart.delete(agent.id) || store.codexThread(agent.id) !== null;
     offline(agent.id);
-    store.seen(agent.id, ctx.now());
+    if (wasOnline) store.seen(agent.id, ctx.now());
   };
   const nativeActivity = (agent: string, time?: string) => {
     if (time && Number.isFinite(Date.parse(time))) ctx.touch(agent, Date.parse(time));
@@ -125,6 +127,9 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
       }
     }
   };
+  // Daemon-owned threads online when the core last stopped, so their first end after the clear below still records last_seen.
+  const onlineBeforeStart = new Set(events ? (db.query(`SELECT t.agent FROM codex_threads t
+    JOIN codex_lifecycle c ON c.agent = t.agent WHERE c.daemon_owned = 1`).all() as { agent: string }[]).map(row => row.agent) : []);
   // Daemon presence must be reconciled before dispatching mail after a restart.
   // Hook-only sessions keep their existing restart behavior.
   if (events) db.exec("DELETE FROM codex_threads WHERE agent IN (SELECT agent FROM codex_lifecycle WHERE daemon_owned = 1)");
