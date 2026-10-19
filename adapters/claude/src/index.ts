@@ -183,6 +183,23 @@ async function ensureClaude($: ClaudeAPI, state: ClaudeState, options: Options):
   finally { if (state.connecting === connecting) state.connecting = undefined; }
 }
 
+// Claude draws a SendMessage row from `display` alone, and the model reads `message` (SEND-NAME-FINDINGS.md),
+// so on the native route only `display` names the recipient instead of its reply socket.
+function named(native: ToolResult, address: string, name: string): ToolResult {
+  const result = "result" in native ? native.result as { display?: unknown } | null : null;
+  if (typeof result?.display !== "string") return native;
+  return { result: { ...result, display: result.display.split(address).join(name) } };
+}
+
+// The comms agent owning a reply socket (`9` and nine digits); Claude's own peer sockets cost no lookup.
+async function replyName($: ClaudeAPI, state: ClaudeState, address: string): Promise<string | undefined> {
+  if (!/\/9\d{9}\.sock$/.test(address)) return undefined;
+  try {
+    const { agents } = await command($, state, "list", state.token ? { token: state.token } : undefined) as { agents: Agent[] };
+    return agents.find(agent => agent.claude_address === address)?.name;
+  } catch { /* A failed lookup keeps Claude's row. */ return undefined; }
+}
+
 async function sendMessage($: ClaudeAPI, state: ClaudeState, event: Extract<ToolEvent, { tool: "SendMessage" }>, next: (event: ToolEvent) => Promise<ToolResult>): Promise<ToolResult> {
   if (typeof event.to !== "string") return next(event);
   if (event.agentId) {
@@ -202,10 +219,14 @@ async function sendMessage($: ClaudeAPI, state: ClaudeState, event: Extract<Tool
       agent = found.agent ?? null;
     } catch { /* A failed lookup passes the call through. */ }
     if (!agent) return next(event);
-    if (agent.claude_address) return next({ ...event, to: agent.claude_address });
+    if (agent.claude_address) return named(await next({ ...event, to: agent.claude_address }), agent.claude_address, agent.name);
     address = `comms:${agent.name}`;
   }
-  if (!address.startsWith("comms:")) return next(event);
+  if (!address.startsWith("comms:")) {
+    const native = await next(event);
+    const name = await replyName($, state, address);
+    return name ? named(native, address, name) : native;
+  }
   if (!state.token || await $.session.id() !== state.sessionId) return { deny: "comms session is not connected" };
   const run = state.generation;
   // Serialize logical sends to one address, so concurrent replies consume
