@@ -17,5 +17,6 @@ export type CodexEvent =
   | { method: "thread/started" | "comms/daemon-discovered"; executable: string; params: { thread: CodexThread } }
   | { method: "thread/status/changed"; params: { threadId: string; status: { type: CodexRuntimeState; activeFlags?: string[] } }; active_at?: string }
   | { method: "thread/closed" | "thread/archived" | "thread/deleted"; params: { threadId: string } }
-  | { method: "comms/daemon-snapshot"; executable: string; params: { threads: CodexThread[] } }
+  // `unload_delay_secs` is the daemon's effective `thread_unload_delay_secs` from `config/read`, absent when the read failed or had no value.
+  | { method: "comms/daemon-snapshot"; executable: string; params: { threads: CodexThread[]; unload_delay_secs?: number } }
   | { method: "comms/daemon-disconnected" };

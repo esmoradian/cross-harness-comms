@@ -129,7 +129,8 @@ export class Rig {
       this.observer = await this.peer();
       await this.observer.request("hello", { versions: { min: this.protocol?.latest ?? 1, max: this.protocol?.latest ?? 1 } });
     }
-    return (await this.observer.request("list", {})).agents;
+    // Every agent, including those agent-facing lists hide after a day offline.
+    return (await this.observer.request("list", { include_stale: true })).agents;
   }
   async agent(harness: Harness, session_key: string): Promise<Agent> {
     const agents = await eventually(() => this.agents(), agents => {

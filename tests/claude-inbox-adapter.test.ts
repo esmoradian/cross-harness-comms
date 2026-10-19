@@ -242,7 +242,7 @@ test("native claude: ListAgents lists other harnesses by their uds address when 
     const lists = runsOf(fake, "list");
     expect(lists.length).toBeGreaterThan(0);
     for (const run of lists) {
-      expect(JSON.parse(run.init?.stdin ?? "{}")).toEqual({ token });
+      expect(JSON.parse(run.init?.stdin ?? "{}")).toEqual({ token, include_stale: false });
       expect(JSON.stringify(run.argv)).not.toContain(token);
     }
   });

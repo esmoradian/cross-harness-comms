@@ -5,7 +5,8 @@ import { deferred } from "../helpers.ts";
 export type CodexEvent =
   | { method: "thread/started"; executable: string; params: { thread: { id: string; cwd: string; parentThreadId?: string | null; ephemeral?: boolean; active_at?: string } } }
   | { method: "thread/status/changed"; params: { threadId: string; status: { type: "notLoaded" | "idle" | "systemError" } | { type: "active"; activeFlags: string[] } }; active_at?: string }
-  | { method: "comms/daemon-snapshot"; executable: string; params: { threads: { id: string; cwd: string; active_at?: string }[] } }
+  | { method: "thread/closed"; params: { threadId: string } }
+  | { method: "comms/daemon-snapshot"; executable: string; params: { threads: { id: string; cwd: string; active_at?: string }[]; unload_delay_secs?: number } }
   | { method: "comms/daemon-disconnected" };
 
 type Entry = { event: CodexEvent; handled: ReturnType<typeof deferred<void>> };

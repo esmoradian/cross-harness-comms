@@ -3,7 +3,6 @@ import type { Agent } from "@cross-harness-comms/protocol";
 import { watchCodexDaemon } from "../packages/core/src/codex/daemon.ts";
 import type { CodexEvent } from "../packages/core/src/codex/events.ts";
 import { createCodexAdapter, type McpResult } from "../adapters/codex/src/index.ts";
-import type { PiToolResult } from "../adapters/pi/src/index.ts";
 import { FakeClaude } from "./support/fakes/claude.ts";
 import { FakeCodex } from "./support/fakes/codex.ts";
 import { fakeCodexDaemon } from "./support/fakes/codex-daemon.ts";
@@ -146,18 +145,16 @@ test("activity: Codex activity follows daemon events and never moves backward", 
   }, undefined, { codexEvents: events, now: time.read });
 });
 
-test("activity: Pi's and Codex's comms_list results include active_at", async () => {
+// Pi's comms_list shows activity as relative text in its rows; presence.test.ts covers them.
+test("activity: Codex's comms_list results include active_at", async () => {
   const time = clock();
   await withRig(async rig => {
     const pi = await rig.harness("pi", uuid(), "/projects/web");
     time.now = T2;
     const codex = await rig.harness("codex", uuid(), "/projects/api");
-    const fromPi = JSON.parse((await pi.list() as PiToolResult).content[0]!.text) as Agent[];
-    const fromCodex = JSON.parse((await codex.list() as McpResult).content[0]!.text) as Agent[];
-    for (const agents of [fromPi, fromCodex]) {
-      expect(activity(agents.find(a => a.id === pi.agent.id))).toBe(T1);
-      expect(activity(agents.find(a => a.id === codex.agent.id))).toBe(T2);
-    }
+    const agents = JSON.parse((await codex.list() as McpResult).content[0]!.text) as Agent[];
+    expect(activity(agents.find(a => a.id === pi.agent.id))).toBe(T1);
+    expect(activity(agents.find(a => a.id === codex.agent.id))).toBe(T2);
   }, undefined, { now: time.read });
 });
 
@@ -188,7 +185,7 @@ test("activity: ListAgents rows under the native header show relative activity a
       fake.time = T1 + elapsed;
       const listing = (await claude.list() as { result: { listing: string } }).result.listing;
       expect(listing.split("\n").find(line => line.includes("pi-web"))).toBe(
-        `  pi-web  ·  pi  ·  online  ·  ${active}  ·  /projects/web  ·  send to comms:pi-web`);
+        `  pi-web  ·  pi  ·  active  ·  ${active}  ·  /projects/web  ·  send to comms:pi-web`);
     }
   }, undefined, { now: time.read });
 });
@@ -202,7 +199,7 @@ test("activity: ListAgents rows without the native header show relative activity
     for (const [elapsed, active] of boundaries) {
       fake.time = T1 + elapsed;
       const listing = (await claude.list() as { result: { listing: string } }).result.listing;
-      expect(listing.split("\n").find(line => line.includes("codex-api"))).toBe(`comms:codex-api (codex, online, ${active}, /projects/api)`);
+      expect(listing.split("\n").find(line => line.includes("codex-api"))).toBe(`comms:codex-api (codex, active, ${active}, /projects/api)`);
     }
   }, undefined, { now: time.read });
 });

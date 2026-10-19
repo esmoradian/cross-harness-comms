@@ -18,6 +18,8 @@ export interface Agent extends SessionRegistration {
   claude_address?: string;
   // The agent's last activity, an ISO 8601 time, in every `list` result; optional because it was added within version 1 (ADR-005, ADR-018).
   active_at?: string;
+  // Computed when `list` or `resolve` answers; `online` means it is not "offline"; optional because it was added within version 1 (ADR-005).
+  presence?: "active" | "idle" | "offline";
 }
 
 export interface Message {
@@ -85,7 +87,8 @@ export interface MethodTable {
   ack: { params: { token: string; id: string }; result: { id: string; state: "acked" } };
   // A Claude session acknowledging the native inbox line sent from the reply socket `from` (ADR-016).
   native_ack: { params: { token: string; from: string }; result: { id: string } };
-  list: { params: { token?: string }; result: { agents: Agent[]; notice?: string } };
+  // `include_stale` also returns agents offline for more than a day, and `hidden` counts those left out (ADR-005, additive).
+  list: { params: { token?: string; include_stale?: boolean }; result: { agents: Agent[]; notice?: string; hidden?: number } };
   // The one agent whose name is exactly `name`, with the fields `list` gives the caller, or null;
   // `skip_claude` answers null for a Claude agent (ADR-005, additive).
   resolve: { params: { token?: string; name: string; skip_claude?: boolean }; result: { agent: Agent | null } };

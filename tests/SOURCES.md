@@ -169,6 +169,26 @@ An independent daemon observer saw `thread/started` for a new unprompted thread;
 - Core lifecycle tests do not open real sockets or harnesses; transport tests do not run real Codex or model turns.
   Neither specifies detach behavior.
 
+### Presence and stale lists (HANDOFF-PRESENCE)
+
+Sources: the decision in `internal/HANDOFF-PRESENCE.md`, and the app-server protocol generated on 2026-10-18 with `codex app-server generate-ts --out <temporary directory>` from the installed Codex CLI 0.163.0.
+These are specified in `presence.test.ts`.
+
+- `config/read` is a `ClientRequest` with `params: ConfigReadParams`, `{ includeLayers?: boolean, cwd?: string | null }`, both optional.
+- Its result is `ConfigReadResponse`, `{ config: Config, origins: { [key]?: ConfigLayerMetadata }, layers: Array<ConfigLayer> | null }`.
+- `Config` names common keys such as `model` and is intersected with an open map of `number | string | boolean | array | object | null` values; `thread_unload_delay_secs` is not a named key, so it arrives through that map, and only when set.
+  The fake daemon answers `config/read` without it by default (`noDelay`), with a chosen value, or with a JSON-RPC error.
+- The transport reports a numeric `thread_unload_delay_secs` as `unload_delay_secs` on that connection's `comms/daemon-snapshot`, and leaves it out when the read failed, the key was absent, or the value was not a number.
+- The core takes the threshold for every Codex agent from the latest snapshot, so a later snapshot without a value goes back to 1800 seconds.
+- No `config/` request other than `config/read` is ever sent.
+- Presence and the one-day stale rule use the core's injected `now`, and `last_seen` follows it too.
+- Boundaries are tested just inside and just past each threshold (29 and 31 minutes, 14 and 16, 23 and 25 hours), not at the exact instant.
+- `rig.agents()` lists with `include_stale: true`, as an observer that sees everything.
+- Pi's rows read Pi's own clock for relative activity, so that test runs the core's clock on real time.
+- The hidden-count line is `N offline agents not shown`: the last line of Claude's `ListAgents` listing and of Pi's text, and a second text content item after Codex's JSON, which stays parseable.
+  Tests use two hidden agents, so the singular wording is not specified.
+- Claude's `ListAgents` runs `comms list` with `include_stale: false`; `comms list` otherwise adds `include_stale: true`.
+
 ## Claude lifecycle
 
 Claude lifecycle tests use the generated 2.1.289 `SessionEndInput` and `ClassicEventOf` declarations, confirmed in the real 2.1.296 clear check.
