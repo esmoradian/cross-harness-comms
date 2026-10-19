@@ -61,6 +61,9 @@ export function createCodexAdapter(runtime: AdapterRuntime): CodexAdapter {
           const result = await request(connection => connection.request("send", params));
           if (result.notice) runtime.notice(result.notice);
           text = sendSummary(result);
+        } else if (call.params.name === "comms_name") {
+          const agent = await request(connection => connection.request("name", { codex_thread: thread, name: args.name as string }));
+          text = `This thread is now comms:${agent.name}.`;
         } else throw new Error("Unknown tool");
         return { content: [{ type: "text", text }] };
       } catch (error) { return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : "Tool failed" }] }; }

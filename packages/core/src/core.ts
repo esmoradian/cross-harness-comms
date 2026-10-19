@@ -36,7 +36,8 @@ export interface Context {
   closed: boolean;
   now: () => number;
   touch(agent: string, time?: number): void;
-  upsert(session: SessionRegistration, tokenHash?: string): Agent;
+  // `chosen` creates a new agent with that chosen name instead of a generated one.
+  upsert(session: SessionRegistration, tokenHash?: string, chosen?: string): Agent;
   delivery(message: Message): Delivery;
   deliver(message: Message): void;
   accept(id: string, sender: string, recipient: string, body: string, reply_to?: string): void;
@@ -50,6 +51,12 @@ const object = (value: unknown): Record<string, unknown> => {
 const string = (value: unknown): string => {
   if (typeof value !== "string" || !value.length) throw failure("INVALID_PARAMS", "Expected a nonempty string", -32602);
   return value;
+};
+
+const validName = (value: unknown): string => {
+  const name = string(value);
+  if (!/^[a-z0-9._-]{1,64}$/.test(name) || /^[0-9a-f-]{8,}$/.test(name)) throw failure("INVALID_NAME", "Use 1-64 lowercase letters, digits, dots, underscores or hyphens; UUID-like names are reserved");
+  return name;
 };
 
 function registration(value: unknown): SessionRegistration {
@@ -96,6 +103,17 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       if (!ctx.closed) store.seen(connection.agent, ctx.now());
     }
   };
+  // The first free `<harness>-<folder>` name, with `-2`, `-3` suffixes.
+  const generatedName = (harness: string, cwd: string) => {
+    const base = `${harness}-${basename(cwd) || "session"}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64);
+    let name = base, suffix = 1;
+    while (store.agentNamed(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
+    return name;
+  };
+  // An offline agent gives up its name for a generated one; its mail stays with it.
+  const release = (agent: AgentRow) =>
+    db.query("UPDATE agents SET name = ?, name_chosen = 0 WHERE id = ?").run(generatedName(agent.harness, agent.cwd), agent.id);
+  const online = (id: string) => live.has(id) || !!store.codexThread(id);
   const authenticated = (params: Record<string, unknown>) => {
     const agent = store.agentWithToken(params.token);
     if (!agent) throw failure("INVALID_TOKEN");
@@ -134,7 +152,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       ctx.deliver(message);
     },
     // Creates or refreshes an agent, which counts as its activity; a token hash is replaced only when given.
-    upsert: (session, tokenHash) => {
+    upsert: (session, tokenHash, chosen) => {
       const now = new Date(ctx.now()).toISOString();
       const agent = store.agentBySession(session.harness, session.session_key);
       if (agent) {
@@ -143,12 +161,10 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         ctx.touch(agent.id);
         return present({ ...agent, ...session, last_seen: now }, true);
       }
-      const base = `${session.harness}-${basename(session.cwd) || "session"}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64);
-      let name = base, suffix = 1;
-      while (store.agentNamed(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
+      const name = chosen ?? generatedName(session.harness, session.cwd);
       const id = messageId(Date.now());
-      db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null);
+      db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash, name_chosen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, session.harness, session.session_key, session.host, name, session.cwd, now, tokenHash ?? null, chosen ? 1 : 0);
       if (session.harness !== "claude") claude.openReplySockets();
       ctx.touch(id);
       return present({ ...session, id, name, last_seen: now }, true);
@@ -168,7 +184,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     try { packet(connection, { jsonrpc: "2.0", id, method: "ping", params: {} }); }
     catch { finish(false); }
   });
-  const register = async (input: SessionRegistration, connection: Connection, suppliedToken: unknown): Promise<Agent> => {
+  const register = async (input: SessionRegistration, connection: Connection, suppliedToken: unknown, replaces: unknown): Promise<Agent> => {
     const session = registration(input);
     const key = JSON.stringify([session.harness, session.session_key]);
     const previousRegistration = registrations.get(key) ?? Promise.resolve();
@@ -187,7 +203,15 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         // new credentials. Registrations for this native session are serialized.
       }
       const token = matches ? suppliedToken as string : randomBytes(32).toString("hex");
-      const agent = ctx.upsert(session, hash(token));
+      // After Claude's /clear, a new identity takes the chosen name of the offline one it replaces on the same harness and host.
+      const replacedId = existing ? undefined : store.agentWithToken(replaces);
+      const replaced = replacedId ? store.agentById(replacedId) : null;
+      const moves = replaced && replaced.harness === session.harness && replaced.host === session.host
+        && store.nameChosen(replaced.id) && !online(replaced.id);
+      const agent = db.transaction(() => {
+        if (moves) release(replaced);
+        return ctx.upsert(session, hash(token), moves ? replaced.name : undefined);
+      })();
       if (previous) {
         detach(previous);
         try { packet(previous, { jsonrpc: "2.0", method: "session_replaced", params: {} }); previous.stream.end(); }
@@ -212,7 +236,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         connection.inbox = string(inbox);
         connection.native = compareVersions(string(version), CLAUDE_NATIVE_MIN_VERSION) >= 0;
       }
-      const agent = params.session ? await register(object(params.session) as unknown as SessionRegistration, connection, params.token) : undefined;
+      const agent = params.session ? await register(object(params.session) as unknown as SessionRegistration, connection, params.token, params.replaces) : undefined;
       if (agent && connection.native) claude.openReplySockets();
       const notice = policy.versions[connection.version]?.notice;
       return { version: connection.version, ...(agent ? { agent, token: connection.token } : {}), ...(notice ? { notice } : {}) };
@@ -280,12 +304,23 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         return { ok: true };
       }
       case "rename": {
-        const agent = resolveAddress(string(params.address), agents()), name = string(params.name);
-        if (!/^[a-z0-9._-]{1,64}$/.test(name) || /^[0-9a-f-]{8,}$/.test(name)) throw failure("INVALID_NAME", "Use 1-64 lowercase letters, digits, dots, underscores or hyphens; UUID-like names are reserved");
+        const agent = resolveAddress(string(params.address), agents()), name = validName(params.name);
         const holder = store.agentNamed(name);
         if (holder && holder.id !== agent.id) throw failure("NAME_TAKEN");
         db.query("UPDATE agents SET name = ? WHERE id = ?").run(name, agent.id);
         return { ...agent, name };
+      }
+      case "name": {
+        const id = params.codex_thread === undefined ? authenticated(params) : codex.sender(string(params.codex_thread));
+        const name = validName(params.name), holder = store.agentNamed(name);
+        const taken = holder && holder.id !== id ? holder : undefined;
+        if (taken && online(taken.id))
+          throw failure("NAME_TAKEN", `${name} is taken by an online ${taken.harness} agent in ${basename(taken.cwd) || taken.cwd}`);
+        db.transaction(() => {
+          if (taken) release(taken);
+          db.query("UPDATE agents SET name = ?, name_chosen = 1 WHERE id = ?").run(name, id);
+        })();
+        return present(store.agentById(id)!, !!store.codexThread(id));
       }
       case "inspect": {
         const message = store.message(string(params.id));

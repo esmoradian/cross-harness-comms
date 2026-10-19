@@ -30,6 +30,9 @@ export function openStore(path: string) {
   // Earlier event-driven builds persisted lifecycle rows before end timestamps existed.
   const lifecycleColumns = db.query("PRAGMA table_info(codex_lifecycle)").all() as { name: string }[];
   if (!lifecycleColumns.some(column => column.name === "ended_at")) db.exec("ALTER TABLE codex_lifecycle ADD COLUMN ended_at INTEGER");
+  // Chosen names came later; existing names stay unchosen. No index, key, or check, so the column stays droppable.
+  const agentColumns = db.query("PRAGMA table_info(agents)").all() as { name: string }[];
+  if (!agentColumns.some(column => column.name === "name_chosen")) db.exec("ALTER TABLE agents ADD COLUMN name_chosen INTEGER NOT NULL DEFAULT 0");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS agent_token ON agents(token_hash)");
   const agentFields = "SELECT id, harness, session_key, host, name, cwd, last_seen FROM agents";
   return {
@@ -40,6 +43,7 @@ export function openStore(path: string) {
     agentBySession: (harness: Harness, sessionKey: string) =>
       db.query(`${agentFields} WHERE harness = ? AND session_key = ?`).get(harness, sessionKey) as AgentRow | null,
     agentNamed: (name: string) => db.query(`${agentFields} WHERE name = ?`).get(name) as AgentRow | null,
+    nameChosen: (id: string) => (db.query("SELECT name_chosen FROM agents WHERE id = ?").get(id) as { name_chosen: number } | null)?.name_chosen === 1,
     agentWithToken: (token: unknown) => typeof token === "string"
       ? (db.query("SELECT id FROM agents WHERE token_hash = ?").get(hash(token)) as { id: string } | null)?.id : undefined,
     // `time` is the core's clock, so presence and the stale rule measure on one clock.

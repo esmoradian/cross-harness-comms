@@ -1,4 +1,4 @@
-import { activeAgo, formatMessage, hiddenLine, messageId, splitLines, VERSION_RANGE, sendSummary, type Agent, type Delivery, type HelloResult, type MethodTable, type SendResult, type WirePacket } from "@cross-harness-comms/protocol";
+import { activeAgo, COMMS_TOOLS, formatMessage, hiddenLine, messageId, splitLines, VERSION_RANGE, sendSummary, type Agent, type Delivery, type HelloResult, type MethodTable, type SendResult, type WirePacket } from "@cross-harness-comms/protocol";
 import type { ClaudeAPI, ClaudeOn, ProcessRunResult, ToolEvent, ToolResult } from "./api.ts";
 
 type Options = { binary: string; host: string };
@@ -6,6 +6,8 @@ type Options = { binary: string; host: string };
 interface ClaudeState {
   binary: string;
   token: string | undefined;
+  // The newest token the core issued, kept after session.end clears `token`, so the hello after /clear names the identity it replaces.
+  lastToken: string | undefined;
   sessionId: string | undefined;
   generation: number;
   nativePeers: boolean;
@@ -18,14 +20,15 @@ interface ClaudeState {
 }
 
 // Claude's validator allows passing $ only to helpers declared at module scope.
-function comms($: ClaudeAPI, state: ClaudeState, name: string, params?: unknown): Promise<ProcessRunResult> {
-  return $.process.run([state.binary, name], params === undefined ? {} : { stdin: JSON.stringify(params) + "\n" });
+// `name` is the CLI command, with its arguments after it.
+function comms($: ClaudeAPI, state: ClaudeState, name: string | readonly string[], params?: unknown): Promise<ProcessRunResult> {
+  return $.process.run([state.binary, ...[name].flat()], params === undefined ? {} : { stdin: JSON.stringify(params) + "\n" });
 }
 
 // A command whose result the tools read: failures carry the exit code, and a notice is shown.
-async function command($: ClaudeAPI, state: ClaudeState, name: string, params?: unknown): Promise<unknown> {
+async function command($: ClaudeAPI, state: ClaudeState, name: string | readonly string[], params?: unknown): Promise<unknown> {
   const response = await comms($, state, name, params);
-  if (response.exitCode) throw Object.assign(new Error(response.stderr.trim() || `comms ${name} failed`), { exitCode: response.exitCode });
+  if (response.exitCode) throw Object.assign(new Error(response.stderr.trim() || `comms ${[name].flat()[0]} failed`), { exitCode: response.exitCode });
   const result = JSON.parse(response.stdout) as { notice?: string };
   if (result.notice) {
     try { $.ui!.log(result.notice); } catch { /* Minimal embedding host has no UI. */ }
@@ -110,12 +113,13 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: Options): 
   owned();
   let resolveReady!: () => void, rejectReady!: (error: unknown) => void;
   const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+  const replaces = state.sessionId !== previousSession ? state.lastToken : undefined;
   const attach = async () => {
     // A retry or first run that fires after the session changed spawns nothing.
     if (run !== state.generation) { rejectReady(new Error("comms session changed")); return; }
     let initialized = false;
     try {
-      const child = $.process.spawn({ argv: [state.binary, "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...(state.token ? { token: state.token } : {}), ...(claude ? { claude } : {}) }) + "\n" });
+      const child = $.process.spawn({ argv: [state.binary, "attach"], input: JSON.stringify({ versions: VERSION_RANGE, session, ...(state.token ? { token: state.token } : {}), ...(replaces ? { replaces } : {}), ...(claude ? { claude } : {}) }) + "\n" });
       let buffer = "";
       for await (const chunk of child) {
         if (run !== state.generation) break;
@@ -130,6 +134,7 @@ async function startClaude($: ClaudeAPI, state: ClaudeState, options: Options): 
             const hello = packet.result as HelloResult;
             if (hello.token) {
               state.token = hello.token;
+              state.lastToken = hello.token;
               if (hello.notice) await notice(hello.notice);
               initialized = true;
               resolveReady();
@@ -276,11 +281,25 @@ async function listAgents($: ClaudeAPI, state: ClaudeState, event: ToolEvent, ne
   return { result: { ...original, listing: [listing, ...extra, ...(hidden ? [hiddenLine(hidden)] : [])].join("\n") } };
 }
 
+// Sets this session's comms name and answers with its address; a refusal throws the core's reason.
+async function chooseName($: ClaudeAPI, state: ClaudeState, name: string): Promise<string> {
+  if (!state.token || await $.session.id() !== state.sessionId) throw new Error("comms session is not connected");
+  const agent = await command($, state, ["name", name], { token: state.token }) as Agent;
+  return `This session is now comms:${agent.name}.`;
+}
+
+const NAME_TOOL = COMMS_TOOLS.find(tool => tool.name === "comms_name")!;
+
 export function registerClaude(on: ClaudeOn, options: Options): { close(): Promise<void> } {
-  const state: ClaudeState = { binary: options.binary, token: undefined, sessionId: undefined, generation: 0, nativePeers: false, connecting: undefined, disconnect: undefined,
+  const state: ClaudeState = { binary: options.binary, token: undefined, lastToken: undefined, sessionId: undefined, generation: 0, nativePeers: false, connecting: undefined, disconnect: undefined,
     pendingReplies: new Map(), received: new Set(), seenNatively: new Set(), sends: new Map() };
   const close = () => closeClaude(state);
   on("session.start", async ($, event, next) => {
+    // Declared once per process or mod load; session.start never fires for /clear.
+    try {
+      await $.command!.register({ name: "comms-name", description: "Choose this session's comms name", argumentHint: "<name>" });
+      await $.tool!.register({ name: NAME_TOOL.name, description: NAME_TOOL.description, inputSchema: NAME_TOOL.inputSchema });
+    } catch { /* A Claude Code without plugin commands and tools still connects. */ }
     await ensureClaude($, state, options);
     return next(event);
   });
@@ -308,7 +327,18 @@ export function registerClaude(on: ClaudeOn, options: Options): { close(): Promi
     }
     return queued;
   });
+  on("command.run", async ($, event, next) => {
+    if (event.command !== "comms-name") return next(event);
+    const name = event.args.trim();
+    if (!name) return { text: "Usage: /comms-name <name>" };
+    try { return { text: await chooseName($, state, name) }; }
+    catch (error) { return { text: error instanceof Error ? error.message : "Naming failed" }; }
+  });
   on("tool.call", async ($, event, next) => {
+    if (event.tool === `mcp__${$.plugin.name}__${NAME_TOOL.name}`) {
+      try { return { result: { success: true, message: await chooseName($, state, String((event as { name?: unknown }).name)) } }; }
+      catch (error) { return { deny: error instanceof Error ? error.message : "Naming failed" }; }
+    }
     if (event.tool === "SendMessage") return sendMessage($, state, event, next);
     return event.tool === "ListAgents" ? listAgents($, state, event, next) : next(event);
   });

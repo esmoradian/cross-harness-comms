@@ -1,5 +1,5 @@
 // The release version of the core, CLI, and plugins; `comms ensure` replaces only an older core.
-export const RELEASE_VERSION = "0.1.23";
+export const RELEASE_VERSION = "0.1.24";
 export type Harness = "pi" | "claude" | "codex";
 
 export interface SessionRegistration {
@@ -233,6 +233,10 @@ export const COMMS_TOOLS = [
   } },
   { name: "comms_list", description: "List cross-harness agents and their presence.", inputSchema: {
     type: "object", properties: { all: { type: "boolean", description: "Also list agents offline for more than a day" } },
+  } },
+  { name: "comms_name", description: "Choose this session's comms name, which other agents send to as comms:<name>.", inputSchema: {
+    type: "object", properties: { name: { type: "string", description: "1-64 lowercase letters, digits, dots, underscores or hyphens" } },
+    required: ["name"], additionalProperties: false,
   } },
 ] as const;
 

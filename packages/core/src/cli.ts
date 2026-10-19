@@ -41,6 +41,7 @@ Usage: comms <command>
   list                   List agents and presence as JSON; optional JSON stdin: token, include_stale
   resolve                Find the agent named exactly, JSON on stdin: name, optional token, skip_claude
   rename <address> <name> Rename an agent
+  name <name>            Choose this session's name, using its token on stdin
   inspect <message-id>   Inspect delivery state
   status                 Show core and protocol versions
   mcp                    Run the Codex MCP server over stdio
@@ -69,6 +70,10 @@ const COMMANDS: Record<string, [RequestMethod, Params]> = {
   rename: ["rename", async argv => {
     if (!argv[1] || !argv[2]) throw new Error("Usage: comms rename <address> <name>");
     return { address: argv[1], name: argv[2] };
+  }],
+  name: ["name", async (argv, io) => {
+    if (!argv[1]) throw new Error("Usage: comms name <name>");
+    return { token: (await readInput(io)).token, name: argv[1] };
   }],
   inspect: ["inspect", async argv => {
     if (!argv[1]) throw new Error("Usage: comms inspect <message-id>");

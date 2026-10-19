@@ -87,10 +87,24 @@ export function registerPi(pi: PiAPI, runtime: AdapterRuntime): AdapterHandle {
     });
   });
   pi.on("session_shutdown", close);
+  const chooseName = async (name: string, ctx: PiContext) => {
+    if (!session || ctx.sessionManager.getSessionId() !== nativeId) throw new Error("Session is not connected");
+    return `This session is now comms:${(await session.name(name)).name}.`;
+  };
+  // Pi Intercom owns /alias.
+  pi.registerCommand("comms-name", { description: "Choose this session's comms name", async handler(args, ctx) {
+    if (!args.trim()) { ctx.ui.notify("Usage: /comms-name <name>", "error"); return; }
+    try { ctx.ui.notify(await chooseName(args.trim(), ctx), "info"); }
+    catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Naming failed", "error"); }
+  } });
   pi.registerMessageRenderer("comms_message", (message, options, theme) => renderCommsMessage(message.details, options.expanded, theme));
   for (const { name, description, inputSchema } of COMMS_TOOLS) pi.registerTool({
-    name, label: name === "comms_send" ? "Send agent message" : "List agents", description, parameters: inputSchema,
+    name, label: { comms_send: "Send agent message", comms_list: "List agents", comms_name: "Choose comms name" }[name], description, parameters: inputSchema,
     async execute(_id, params, _signal, _onUpdate, ctx) {
+      if (name === "comms_name") {
+        const text = await chooseName(params.name as string, ctx);
+        return { content: [{ type: "text", text }], details: {} };
+      }
       if (!session || ctx.sessionManager.getSessionId() !== nativeId) throw new Error("Session is not connected");
       const result = name === "comms_list" ? await session.list({ include_stale: params.all === true }) : await session.send({
         id: messageId(Date.now()), to: params.to as string, body: params.text as string,
