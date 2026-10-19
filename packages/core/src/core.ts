@@ -311,7 +311,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         const id = string(params.id);
         if (!uuid.test(id) || typeof params.body !== "string") throw failure("INVALID_MESSAGE");
         const target = resolveAddress(string(params.to), agents()), recipient = target.id;
-        const to = { name: target.name, online: target.online };
+        const to = { name: target.name, online: target.online, harness: target.harness, session_key: target.session_key };
         const reply_to = params.reply_to === undefined ? undefined : string(params.reply_to);
         if (reply_to && !store.message(reply_to)) throw failure("INVALID_MESSAGE", "Unknown reply_to message");
         const existing = store.message(id);

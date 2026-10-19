@@ -1,5 +1,5 @@
 // The release version of the core, CLI, and plugins; `comms ensure` replaces only an older core.
-export const RELEASE_VERSION = "0.1.28";
+export const RELEASE_VERSION = "0.1.29";
 export type Harness = "pi" | "claude" | "codex";
 
 export interface SessionRegistration {
@@ -71,9 +71,11 @@ export interface SendResult {
   id: string;
   state: "queued" | "delivered" | "acked";
   notice?: string;
-  // The recipient's agent name and presence; optional because they were added within version 1.
+  // The recipient's agent name, presence, harness, and native session ID; optional because they were added within version 1.
   name?: string;
   online?: boolean;
+  harness?: Harness;
+  session_key?: string;
 }
 export interface MethodTable {
   ping: { params: Record<string, never>; result: Record<string, never> };
