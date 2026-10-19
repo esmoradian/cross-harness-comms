@@ -225,10 +225,17 @@ These are specified in `names.test.ts`.
   `FakeClaude.tool` throws for an `mcp__` tool never registered and answers `{ deny }` when no hook answers one; the plugin name is `cross-harness-comms`, so the name tool is `mcp__cross-harness-comms__comms_name` (`FakeClaude.toolName`).
   Both are declared in `session.start`, which the generated types say a `$.tool.register` awaited there is listed by turn one; `/clear` fires no `session.start`, and the fake keeps registrations across it.
   These methods are in the 2.1.296 generated types; whether 2.1.289 had them was not checked.
+- Claude: a hook's answer to a `$.tool.register` tool must have a `result` that is a string, an array of MCP content blocks, or undefined (HANDOFF-FIXES-3 fix 1).
+  The generated 2.1.296 `ToolCallResult` says "Core validates a hook's answer against the tool's output schema when it has one", and `McpToolResult` gives the content blocks as `McpContentBlock[]`, each with a string `type`.
+  The real 2.1.296 check 9 in `internal/VALIDATION-RESULTS-0.1.24.md` showed the model, for the 0.1.24 answer `{ result: { success: true, message } }`, `<tool_use_error>tool.call step resolved mcp__cross-harness-comms__comms_name with a result that does not match its output shape`, followed by a Zod `invalid_union` of `expected string`, `expected array`, and `expected undefined`, each `received object`.
+  `FakeClaude.tool` rejects any other `result` for a registered tool with an error starting with that same sentence; the check that each array item has a string `type` follows `McpContentBlock`, since the observed error shows only `expected array`.
+  A `{ deny }` answer and the results of built-in tools such as `SendMessage` and `ListAgents` are not checked.
 - Pi: `pi.registerCommand(name, { description?, handler(args, ctx) })` registers `/<name>`; the handler gets the text after the name and an `ExtensionCommandContext`, of which the structural subset declares only `ui.notify(message, type?)`.
   `FakePi.command(name, args)` runs the handler and records each notification in `notifications`.
 - Pi reloads and rebinds extensions for a new session (`session_shutdown`, then `session_start` with reason `new`), so a new Pi session is a new extension instance; the test starts a new `FakePi` for it.
 - The `name` refusal for an online holder is `NAME_TAKEN` with a message containing the holder's harness and the last part of its working directory; the exact wording is left to the implementation.
+- Plain names (HANDOFF-FIXES-3 fix 2): the `plain names:` tests in `names.test.ts` and `core.test.ts` send from Pi and Codex and rename with addresses that have no scheme.
+  A refused Pi send throws the core's error, so the test reads its `data.code`; Codex keeps only the message text in its error result, so its tests check `isError` and that the text names the address.
 - The migration test drops `agents.name_chosen` from a current database to stand in for one from before chosen names, so the column must stay droppable (not part of an index, key, or check constraint).
 
 ## Retention (HANDOFF-RETENTION)

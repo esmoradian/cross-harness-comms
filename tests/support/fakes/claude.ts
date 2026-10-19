@@ -269,7 +269,11 @@ export class FakeClaude {
       this.nativeCalls.push(e);
       return e.tool === "ListAgents" ? { result: { listing: this.nativeListing } } : this.nativeResult;
     };
-    return dispatch(0, event);
+    const answer = await dispatch(0, event);
+    // Claude Code validates a registered tool's answer against its MCP output shape; built-in tools keep their records.
+    if (plugin && "result" in answer && !mcpToolOutput(answer.result))
+      throw new Error(`tool.call step resolved ${event.tool} with a result that does not match its output shape: expected a string, an array of content blocks, or undefined`);
+    return answer;
   }
   // Runs `/<command> <args>` typed at the prompt. Only a registered command is offered, and one no hook answers says so.
   async command(command: string, args = ""): Promise<CommandRunResult> {
@@ -370,5 +374,9 @@ export class FakeClaude {
     void this.inbox?.close();
   }
 }
+
+// What a hook may answer a `$.tool.register` tool with: a string, `McpContentBlock[]` (each with a string `type`), or undefined.
+const mcpToolOutput = (value: unknown) => value === undefined || typeof value === "string"
+  || (Array.isArray(value) && value.every(block => !!block && typeof block === "object" && typeof (block as { type?: unknown }).type === "string"));
 
 async function* textInput(text?: string) { if (text !== undefined) yield text; }

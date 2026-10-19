@@ -59,6 +59,23 @@ test("invariant 3: ambiguous UUID prefix fails instead of selecting the first ma
   expect(resolveAddress(`comms:${addressAgents[1]!.id}`, addressAgents).id).toBe(addressAgents[1]!.id);
 });
 
+test("plain names: resolveAddress takes an address without a scheme as a comms name or ID, with prefixes and ambiguity as with comms:, and refuses other schemes", () => {
+  const agents: Agent[] = [...addressAgents, { ...addressAgents[0]!, id: "019f5678-0000-7000-8000-000000000003", name: "codex-api", session_key: "c" }];
+  const code = (address: string) => {
+    try { return resolveAddress(address, agents).id; }
+    catch (error) { return (error as { data?: { code?: string } }).data?.code; }
+  };
+  for (const prefix of ["comms:", ""]) {
+    expect(code(`${prefix}pi-shared`)).toBe(agents[0]!.id);
+    expect(code(`${prefix}${agents[1]!.id}`)).toBe(agents[1]!.id);
+    expect(code(`${prefix}019f5678`)).toBe(agents[2]!.id);
+    expect(code(`${prefix}019f1234`)).toBe("AMBIGUOUS_RECIPIENT");
+    expect(code(`${prefix}019f567`)).toBe("UNKNOWN_RECIPIENT");
+    expect(code(`${prefix}nobody`)).toBe("UNKNOWN_RECIPIENT");
+  }
+  for (const address of ["uds:pi-shared", "uds:x", "http:pi-shared", `other:${agents[0]!.id}`]) expect(code(address), address).toBe("UNKNOWN_RECIPIENT");
+});
+
 test("invariant 4: send confirmation follows a durable write and retries do not duplicate it", async () => {
   await withRig(async rig => {
     const sender = await rig.peer(), receiver = await rig.peer();

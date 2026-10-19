@@ -288,9 +288,8 @@ test("names: Claude's model sets its name with comms_name, and a refusal is deni
   await withRig(async rig => {
     const claude = await rig.harness("claude");
     const fake = claude.fake as FakeClaude;
-    const result = await claudeName(fake, "planner");
-    expect(result).not.toHaveProperty("deny");
-    expect(JSON.stringify("result" in result ? result.result : null)).toContain("comms:planner");
+    // A plain string, the shape Claude Code accepts for a registered tool (HANDOFF-FIXES-3 fix 1).
+    expect(await claudeName(fake, "planner")).toEqual({ result: expect.stringContaining("comms:planner") });
     expect((await named(rig, claude.agent.id)).name).toBe("planner");
     const holder = await rig.harness("pi", undefined, "/projects/review-desk");
     expect((await cli(rig, ["rename", `comms:${holder.agent.name}`, "reviewer"])).exitCode).toBe(0);
@@ -298,6 +297,30 @@ test("names: Claude's model sets its name with comms_name, and a refusal is deni
     expect(refused).toHaveProperty("deny");
     expect("deny" in refused && refused.deny).toContain("review-desk");
     expect(fake.nativeCalls).toEqual([]);
+  });
+});
+
+test("names: the fake checks a registered tool's answer as Claude Code does: a string, content blocks, or undefined, never an object", async () => {
+  await withRig(async rig => {
+    const fake = new FakeClaude(uuid(), "/projects/shared", rig.cliRuntime());
+    try {
+      await fake.api.tool!.register({ name: "probe", description: "Probe" });
+      const probe = FakeClaude.toolName("probe");
+      let answer: unknown;
+      fake.on("tool.call", async (_$, event, next) => event.tool === probe ? { result: answer } : next(event));
+      const call = () => fake.tool({ tool: probe, tool_use_id: uuid() });
+      for (const accepted of ["Done.", [{ type: "text", text: "Done." }], undefined]) {
+        answer = accepted;
+        expect(await call()).toEqual({ result: accepted });
+      }
+      // The first is the shape the 0.1.24 adapter answered comms_name with.
+      for (const rejected of [{ success: true, message: "Done." }, 42, [{ text: "No type" }]]) {
+        answer = rejected;
+        await expect(call()).rejects.toThrow(`tool.call step resolved ${probe} with a result that does not match its output shape`);
+      }
+      // Built-in tools keep their own structured results.
+      expect(await fake.tool({ tool: "ListAgents", tool_use_id: uuid() })).toEqual({ result: { listing: fake.nativeListing } });
+    } finally { fake.close(); }
   });
 });
 
@@ -449,4 +472,66 @@ test("names: bare-name and comms: sends from every harness reach a chosen name",
     expect(rig.rows().map(row => [row.recipient, row.body])).toEqual([
       [target.agent.id, "From Claude by bare name"], [target.agent.id, "From Codex"]]);
   });
+});
+
+// Plain names (HANDOFF-FIXES-3 fix 2): the core takes an address without a scheme as a comms name or ID, so Pi and Codex
+// reach the names their lists and message headers show. Any other scheme still fails, and an unknown address is named in the error.
+
+// What a refused comms_send told the model: Pi throws the core's error, and Codex answers an error result with its message.
+async function refusedSend(sender: HarnessSession, to: string): Promise<string> {
+  if (sender.harness === "pi") {
+    const error = await sender.send(to, "Anyone there?").then(() => undefined, (caught: Error) => caught);
+    expect(error, to).toMatchObject({ data: { code: "UNKNOWN_RECIPIENT" } });
+    return error!.message;
+  }
+  const result = await sender.send(to, "Anyone there?") as { isError?: boolean; content: { text: string }[] };
+  expect(result.isError, to).toBe(true);
+  return result.content.map(item => item.text).join("\n");
+}
+
+for (const harness of ["pi", "codex"] as Harness[]) {
+  test(`plain names: ${harness}'s comms_send reaches a chosen name and a generated name given without comms:`, async () => {
+    await withRig(async rig => {
+      const chosen = await join(rig, "pi", "/projects/target"), generated = await join(rig, "pi", "/projects/plain");
+      await chosen.peer.request("name", { token: chosen.token, name: "planner" });
+      expect(generated.agent.name).toBe("pi-plain");
+      const sender = await rig.harness(harness, undefined, "/projects/sender");
+      for (const [to, target] of [["planner", chosen], ["pi-plain", generated]] as const) {
+        expect(JSON.stringify(await sender.send(to, `For ${to}`)), to).toContain(`Sent to ${to}.`);
+        expect((await target.peer.deliveries.next()).message).toMatchObject({ recipient: target.agent.id, body: `For ${to}` });
+      }
+      expect(rig.rows().map(row => row.recipient)).toEqual([chosen.agent.id, generated.agent.id]);
+    });
+  });
+
+  test(`plain names: ${harness}'s comms_send to an unknown plain name fails with UNKNOWN_RECIPIENT naming it, other schemes still fail, and nothing is stored`, async () => {
+    await withRig(async rig => {
+      const target = await join(rig, "pi", "/projects/target");
+      await target.peer.request("name", { token: target.token, name: "planner" });
+      const sender = await rig.harness(harness, undefined, "/projects/sender");
+      expect(await refusedSend(sender, "nobody")).toContain("nobody");
+      for (const to of ["uds:x", "uds:planner", "http:planner", `other:${target.agent.id}`]) await refusedSend(sender, to);
+      expect(rig.rows()).toEqual([]);
+      expect(bodies(target.peer)).toEqual([]);
+    });
+  });
+}
+
+test("plain names: comms rename takes a plain name or ID as the address, and another scheme still fails", async () => {
+  await withRig(async rig => {
+    const agent = await join(rig, "pi");
+    for (const [address, name] of [["pi-shared", "planner"], [agent.agent.id, "reviewer"]] as [string, string][]) {
+      const result = await cli(rig, ["rename", address, name]);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect((await named(rig, agent.agent.id)).name).toBe(name);
+    }
+    expect((await cli(rig, ["rename", "uds:reviewer", "other"])).exitCode).not.toBe(0);
+    expect((await named(rig, agent.agent.id)).name).toBe("reviewer");
+  });
+});
+
+test("plain names: comms_send's to says a name and comms:<name> both work", () => {
+  const description: string = COMMS_TOOLS[0].inputSchema.properties.to.description;
+  expect(description).toContain("comms:<name>");
+  expect(description.replace("comms:<name>", "")).toMatch(/\bname\b/);
 });
