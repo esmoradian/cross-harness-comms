@@ -22,7 +22,12 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
   let unloadDelaySecs = 1800;
   const lifecycle = (agent: string) => db.query("SELECT executable, runtime_state, ended, ended_at, daemon_owned FROM codex_lifecycle WHERE agent = ?")
     .get(agent) as Lifecycle | null;
-  const offline = (agent: string) => db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent);
+  const offline = db.transaction((agent: string) => {
+    // Only the transition records last_seen, including a queue refusal.
+    const wasOnline = onlineBeforeStart.delete(agent) || store.codexThread(agent) !== null;
+    db.query("DELETE FROM codex_threads WHERE agent = ?").run(agent);
+    if (wasOnline) store.seen(agent, ctx.now());
+  });
   // The Codex MCP server acts for whichever online thread its call names (ADR-014).
   const sender = (thread: string) => {
     const agent = store.agentBySession("codex", thread);
@@ -64,10 +69,7 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
         ended = CASE WHEN excluded.ended = 1 THEN 1 ELSE codex_lifecycle.ended END,
         ended_at = CASE WHEN excluded.ended = 1 THEN excluded.ended_at ELSE codex_lifecycle.ended_at END`)
       .run(agent.id, state, ended ? 1 : 0, ended ? ctx.now() : null);
-    // Only going offline records last_seen; ending an agent already offline must not refresh it.
-    const wasOnline = onlineBeforeStart.delete(agent.id) || store.codexThread(agent.id) !== null;
     offline(agent.id);
-    if (wasOnline) store.seen(agent.id, ctx.now());
   };
   const nativeActivity = (agent: string, time?: string) => {
     if (time && Number.isFinite(Date.parse(time))) ctx.touch(agent, Date.parse(time));

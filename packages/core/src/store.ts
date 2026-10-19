@@ -21,6 +21,7 @@ export function openStore(path: string) {
       reply_to TEXT REFERENCES messages(id), body TEXT NOT NULL, created_at TEXT NOT NULL,
       state TEXT NOT NULL CHECK(state IN ('queued','delivered','acked')));
     CREATE INDEX IF NOT EXISTS mailbox ON messages(recipient, state);
+    CREATE TABLE IF NOT EXISTS connected_sessions (agent TEXT PRIMARY KEY REFERENCES agents(id));
     CREATE TABLE IF NOT EXISTS codex_threads (agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS codex_lifecycle (
       agent TEXT PRIMARY KEY REFERENCES agents(id), executable TEXT NOT NULL,

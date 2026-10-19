@@ -1,7 +1,7 @@
 import type { Duplex } from "node:stream";
-import { cp, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createClient, readPackets, writePacket, type CommandIO } from "@cross-harness-comms/client";
 import { VERSION_RANGE, MAX_LINE_BYTES, compareVersions, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
@@ -99,7 +99,7 @@ async function allowCodexReplies(io: CommandIO, platform: Platform): Promise<voi
 }
 
 // Copies `plugins/pi` beside this binary to `<data>/pi/<version>`, points `<data>/pi/current` at it, and keeps it and the
-// newest other version (HANDOFF-PI-LIVE-SUBAGENTS). Pi loads the package from `current`, so a switch is one rename.
+// newest other version (HANDOFF-PI-LIVE-SUBAGENTS). Same-version replacements also retain recent fallback copies.
 async function installPi(io: CommandIO, runtime: CliRuntime): Promise<number> {
   const source = join(dirname(runtime.command?.[0] ?? process.execPath), "plugins", "pi");
   const version = await readFile(join(source, "package.json"), "utf8").then(text => (JSON.parse(text) as { version?: unknown }).version, () => undefined);
@@ -110,15 +110,31 @@ async function installPi(io: CommandIO, runtime: CliRuntime): Promise<number> {
   const temporary = (label: string) => join(root, `.${label}-${randomBytes(6).toString("hex")}`);
   await mkdir(root, { recursive: true });
   const staged = temporary(version), replaced = temporary(`${version}-old`), link = temporary("current");
+  const previous = temporary("previous");
+  let preservePrevious = false;
   try {
     await cp(source, staged, { recursive: true });
+    if (resolve(root, await readlink(current).catch(() => "")) === target) {
+      // Switch to a complete copy before moving the selected version. A crash can leave current here safely.
+      await cp(target, previous, { recursive: true });
+      preservePrevious = true;
+      await symlink(basename(previous), link);
+      await runtime.platform.publishLink(link, current);
+    }
     await rename(target, replaced).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
     await rename(staged, target);
     await symlink(version, link);
-    await rename(link, current);
-  } finally { await Promise.all([staged, replaced, link].map(path => rm(path, { recursive: true, force: true }))); }
+    await runtime.platform.publishLink(link, current);
+  } finally {
+    await Promise.all([staged, replaced, link, ...(!preservePrevious ? [previous] : [])]
+      .map(path => rm(path, { recursive: true, force: true })));
+  }
   const others = (await readdir(root)).filter(entry => entry !== "current" && entry !== version);
   const kept = others.filter(entry => /^\d+\.\d+\.\d+$/.test(entry)).sort((a, b) => compareVersions(b, a)).slice(0, 1);
+  // Readers may already have followed current to the fallback. Keep the latest two copies past publication.
+  const snapshots = await Promise.all(others.filter(entry => entry.startsWith(".previous-"))
+    .map(async entry => ({ entry, time: (await stat(join(root, entry))).mtimeMs })));
+  kept.push(...snapshots.sort((a, b) => b.time - a.time || b.entry.localeCompare(a.entry)).slice(0, 2).map(snapshot => snapshot.entry));
   await Promise.all(others.filter(entry => !kept.includes(entry)).map(entry => rm(join(root, entry), { recursive: true, force: true })));
   io.stdout(`Installed the comms Pi package ${version} in ${target}.\nAdd this path to the packages in Pi's settings: ${current}\n`);
   return 0;

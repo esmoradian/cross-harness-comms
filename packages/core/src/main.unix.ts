@@ -1,8 +1,9 @@
 import { connect } from "node:net";
 import { createUnixPlatform } from "./platform/unix.ts";
+import type { Platform } from "./platform/platform.ts";
 import { runCli } from "./cli.ts";
 
-export async function main(argv: readonly string[]): Promise<number> {
+export async function main(argv: readonly string[], platform: Platform = createUnixPlatform()): Promise<number> {
   const abort = new AbortController();
   const stop = () => { abort.abort(); process.stdin.destroy(); };
   process.on("SIGINT", stop); process.on("SIGTERM", stop);
@@ -14,7 +15,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       stdin: process.stdin.isTTY ? (async function* () {})() : process.stdin as unknown as AsyncIterable<string>,
       stdout: text => { process.stdout.write(text); }, stderr: text => { process.stderr.write(text); }, signal: abort.signal,
     }, {
-      platform: createUnixPlatform(), compiled,
+      platform, compiled,
       command: compiled ? [process.execPath] : [process.execPath, import.meta.path],
       connect: address => new Promise((resolve, reject) => {
         const socket = connect(address);

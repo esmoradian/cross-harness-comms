@@ -181,11 +181,11 @@ async function ensureClaude($: ClaudeAPI, state: ClaudeState, options: Options):
 }
 
 // Claude draws a SendMessage row from `display` alone, and the model reads `message` (SEND-NAME-FINDINGS.md),
-// so on the native route only `display` names the recipient instead of its reply socket.
+// so name the recipient in the UI and describe submission without claiming whether the peer has read it.
 function named(native: ToolResult, address: string, name: string): ToolResult {
-  const result = "result" in native ? native.result as { display?: unknown } | null : null;
-  if (typeof result?.display !== "string") return native;
-  return { result: { ...result, display: result.display.split(address).join(name) } };
+  const result = "result" in native ? native.result as { display?: unknown; success?: unknown } | null : null;
+  if (result?.success !== true || typeof result.display !== "string") return native;
+  return { result: { ...result, display: result.display.split(address).join(name), message: `Submitted to ${name} through comms.` } };
 }
 
 // The comms agent owning a reply socket (`9` and nine digits); Claude's own peer sockets cost no lookup.

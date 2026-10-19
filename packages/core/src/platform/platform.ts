@@ -10,4 +10,6 @@ export interface Platform {
   codexHome(): string;
   // Calls `onGone` once the process that started this one is gone, and returns a function that stops watching.
   watchParent(onGone: () => void): () => void;
+  // Publish a prepared symlink, replacing the destination without interrupting concurrent readers.
+  publishLink(source: string, destination: string): Promise<void>;
 }

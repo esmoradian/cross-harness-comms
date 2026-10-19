@@ -99,9 +99,13 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     connections.delete(connection);
     clearTimeout(connection.inflight?.timer);
     for (const finish of connection.pings.values()) finish(false);
-    if (connection.agent && live.get(connection.agent) === connection) {
-      live.delete(connection.agent);
-      if (!ctx.closed) store.seen(connection.agent, ctx.now());
+    const agent = connection.agent;
+    if (agent && live.get(agent) === connection) {
+      live.delete(agent);
+      if (!ctx.closed) db.transaction(() => {
+        store.seen(agent, ctx.now());
+        db.query("DELETE FROM connected_sessions WHERE agent = ?").run(agent);
+      })();
     }
   };
   // Retention (HANDOFF-RETENTION): old offline agents are removed, and their names are held, for 30 days each.
@@ -141,6 +145,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       db.query(`DELETE FROM messages WHERE ${mail}`).run(list);
       db.query(`DELETE FROM codex_threads WHERE agent IN ${ids}`).run(list);
       db.query(`DELETE FROM codex_lifecycle WHERE agent IN ${ids}`).run(list);
+      db.query(`DELETE FROM connected_sessions WHERE agent IN ${ids}`).run(list);
       db.query(`INSERT OR REPLACE INTO released_names SELECT name, ?2 FROM agents WHERE id IN ${ids}`).run(list, new Date(ctx.now()).toISOString());
       db.query(`DELETE FROM agents WHERE id IN ${ids}`).run(list);
     })(JSON.stringify([...removed]));
@@ -259,6 +264,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       }
       connection.agent = agent.id;
       connection.token = token;
+      db.query("INSERT OR IGNORE INTO connected_sessions (agent) VALUES (?)").run(agent.id);
       live.set(agent.id, connection);
       return agent;
     });
@@ -378,6 +384,12 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       default: throw failure("METHOD_NOT_FOUND", "Method not found", -32601);
     }
   };
+  // Connections left by a crash were online until the core stopped, even when quiet for months.
+  // Give them a fresh retention period before sweeping; ordinary offline sessions keep their age.
+  db.transaction(() => {
+    db.query("UPDATE agents SET last_seen = ? WHERE id IN (SELECT agent FROM connected_sessions)").run(new Date(ctx.now()).toISOString());
+    db.exec("DELETE FROM connected_sessions");
+  })();
   const codex = codexThreads(ctx, options.run, options.codexEvents);
   sweep();
   return {
@@ -426,7 +438,10 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     async close() {
       if (ctx.closed) return;
       // Agents online until now were seen now, so the next start's sweep does not count the downtime against them.
-      for (const agent of live.keys()) store.seen(agent, ctx.now());
+      db.transaction(() => {
+        for (const agent of live.keys()) store.seen(agent, ctx.now());
+        db.exec("DELETE FROM connected_sessions");
+      })();
       ctx.closed = true;
       await codex.close();
       claude.close();

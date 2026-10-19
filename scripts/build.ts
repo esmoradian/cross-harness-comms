@@ -24,7 +24,8 @@ async function main() {
   const target = process.argv[2] ?? "bun-darwin-arm64";
   if (!["bun-darwin-arm64", "bun-darwin-x64", "bun-linux-arm64", "bun-linux-x64"].includes(target)) throw new Error("Unsupported Unix target");
   process.chdir(root);
-  const compile = Bun.spawn([process.execPath, "build", "--compile", `--target=${target}`, "packages/core/src/main.unix.ts", "--outfile", "dist/comms"], { stdout: "inherit", stderr: "inherit" });
+  const entry = target.startsWith("bun-darwin-") ? "packages/core/src/main.darwin.ts" : "packages/core/src/main.unix.ts";
+  const compile = Bun.spawn([process.execPath, "build", "--compile", `--target=${target}`, entry, "--outfile", "dist/comms"], { stdout: "inherit", stderr: "inherit" });
   if (await compile.exited) throw new Error("Core build failed");
   for (const harness of ["pi", "claude", "codex"]) {
     const output = `dist/plugins/${harness}`;

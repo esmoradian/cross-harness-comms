@@ -1,4 +1,4 @@
-import { chmod, mkdir, lstat, readlink, unlink } from "node:fs/promises";
+import { chmod, mkdir, lstat, readlink, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
@@ -11,6 +11,7 @@ export function createUnixPlatform(): Platform {
     dataDirectory: () => directory,
     socketAddress: () => address,
     binaryName: () => "comms",
+    publishLink: rename,
     async prepareListen() {
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const stat = await lstat(directory);
