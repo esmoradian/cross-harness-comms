@@ -118,8 +118,7 @@ export async function writeReleaseTree(outdir: string, checksums: Readonly<Recor
 
 async function compile(target: string, outfile: string): Promise<void> {
   // The target is chosen at build time. No runtime operating system selection.
-  const entry = target.startsWith("bun-darwin-") ? "packages/core/src/main.darwin.ts" : "packages/core/src/main.unix.ts";
-  const build = Bun.spawn([process.execPath, "build", "--compile", `--target=${target}`, entry, "--outfile", outfile],
+  const build = Bun.spawn([process.execPath, "build", "--compile", `--target=${target}`, "packages/core/src/main.unix.ts", "--outfile", outfile],
     { cwd: root, stdout: "inherit", stderr: "inherit" });
   if (await build.exited) throw new Error(`Core build failed for ${target}`);
   // Bun appends the bundle after linking, which invalidates the linker's ad-hoc signature, so macOS cores are signed again.

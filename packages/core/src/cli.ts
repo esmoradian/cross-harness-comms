@@ -1,9 +1,8 @@
 import type { Duplex } from "node:stream";
-import { cp, mkdir, readdir, readFile, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createClient, readPackets, writePacket, type CommandIO } from "@cross-harness-comms/client";
-import { VERSION_RANGE, MAX_LINE_BYTES, compareVersions, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
+import { VERSION_RANGE, MAX_LINE_BYTES, type HelloParams, type MethodTable, type RequestMethod } from "@cross-harness-comms/protocol";
 import type { Platform } from "./platform/platform.ts";
 import { ensure, serve, CORE_VERSION } from "./lifecycle.ts";
 import { runMcp, codexHook, type CodexHost } from "@cross-harness-comms/codex/mcp";
@@ -48,7 +47,6 @@ Usage: comms <command>
   mcp                    Run the Codex MCP server over stdio
   session-start          Mark a Codex thread online from its SessionStart hook JSON
   session-end            Mark a Codex thread offline from its SessionEnd hook JSON
-  install pi             Install the built Pi package beside this binary; print the path for Pi's settings
   install <harness>      Print the published install commands for claude or codex
   version                Print binary version
   help                   Show this help
@@ -99,48 +97,6 @@ async function allowCodexReplies(io: CommandIO, platform: Platform): Promise<voi
   io.stdout(`Allowed comms replies without review in ${path}.\n`);
 }
 
-// Copies `plugins/pi` beside this binary to `<data>/pi/<version>`, points `<data>/pi/current` at it, and keeps it and the
-// newest other version. Same-version replacements also retain recent fallback copies.
-async function installPi(io: CommandIO, runtime: CliRuntime): Promise<number> {
-  const source = join(dirname(runtime.command?.[0] ?? process.execPath), "plugins", "pi");
-  const version = await readFile(join(source, "package.json"), "utf8").then(text => (JSON.parse(text) as { version?: unknown }).version, () => undefined);
-  if (version === undefined) throw new Error(`No built Pi package in ${source}; run bun run build and use dist/comms`);
-  // The version names a directory, so it must be a plain version.
-  if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Unreadable Pi package version in ${join(source, "package.json")}`);
-  const root = join(runtime.platform.dataDirectory(), "pi"), current = join(root, "current"), target = join(root, version);
-  const temporary = (label: string) => join(root, `.${label}-${randomBytes(6).toString("hex")}`);
-  await mkdir(root, { recursive: true });
-  const staged = temporary(version), replaced = temporary(`${version}-old`), link = temporary("current");
-  const previous = temporary("previous");
-  let preservePrevious = false;
-  try {
-    await cp(source, staged, { recursive: true });
-    if (resolve(root, await readlink(current).catch(() => "")) === target) {
-      // Switch to a complete copy before moving the selected version. A crash can leave current here safely.
-      await cp(target, previous, { recursive: true });
-      preservePrevious = true;
-      await symlink(basename(previous), link);
-      await runtime.platform.publishLink(link, current);
-    }
-    await rename(target, replaced).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
-    await rename(staged, target);
-    await symlink(version, link);
-    await runtime.platform.publishLink(link, current);
-  } finally {
-    await Promise.all([staged, replaced, link, ...(!preservePrevious ? [previous] : [])]
-      .map(path => rm(path, { recursive: true, force: true })));
-  }
-  const others = (await readdir(root)).filter(entry => entry !== "current" && entry !== version);
-  const kept = others.filter(entry => /^\d+\.\d+\.\d+$/.test(entry)).sort((a, b) => compareVersions(b, a)).slice(0, 1);
-  // Readers may already have followed current to the fallback. Keep the latest two copies past publication.
-  const snapshots = await Promise.all(others.filter(entry => entry.startsWith(".previous-"))
-    .map(async entry => ({ entry, time: (await stat(join(root, entry))).mtimeMs })));
-  kept.push(...snapshots.sort((a, b) => b.time - a.time || b.entry.localeCompare(a.entry)).slice(0, 2).map(snapshot => snapshot.entry));
-  await Promise.all(others.filter(entry => !kept.includes(entry)).map(entry => rm(join(root, entry), { recursive: true, force: true })));
-  io.stdout(`Installed the comms Pi package ${version} in ${target}.\nAdd this path to the packages in Pi's settings: ${current}\n`);
-  return 0;
-}
-
 // What the Codex MCP server and hooks need from the core, passed in so the adapter does not import the core.
 function codexHost(runtime: CliRuntime): CodexHost {
   return { connect: runtime.connect, ensure: () => ensure(runtime), processExecutable: pid => runtime.platform.processExecutable(pid) };
@@ -156,7 +112,6 @@ export async function runCli(argv: readonly string[], io: CommandIO, runtime: Cl
     if (command === "mcp") return await runMcp(io, codexHost(runtime));
     if (command === "session-start" || command === "session-end") return await codexHook(await readInput(io), codexHost(runtime));
     if (command === "install") {
-      if (argv[1] === "pi") return await installPi(io, runtime);
       // The published install: the `release` branch marketplace, then the plugin from it.
       const instructions: Record<string, string> = {
         claude: "Install comms from its published release:\n\n"
@@ -164,7 +119,7 @@ export async function runCli(argv: readonly string[], io: CommandIO, runtime: Cl
         codex: "Install comms from its published release, then trust its SessionStart hook:\n\n"
           + "  codex plugin marketplace add esmoradian/cross-harness-comms --ref release\n  codex plugin add cross-harness-comms@comms\n",
       };
-      if (!argv[1] || !instructions[argv[1]]) throw new Error("Supported integrations: pi, claude, codex");
+      if (!argv[1] || !instructions[argv[1]]) throw new Error("Supported integrations: claude, codex");
       if (argv[1] === "codex" && argv[2] === "--allow-replies") { await allowCodexReplies(io, runtime.platform); return 0; }
       io.stdout(instructions[argv[1]]!);
       if (argv[1] === "codex") io.stdout("\nCodex's automatic review asks you before each reply to another agent. To let agents reply through comms\n"
