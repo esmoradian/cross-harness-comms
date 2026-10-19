@@ -157,7 +157,6 @@ export class Rig {
       processExecutable: async () => this.codexExecutable, codexHome: () => join(this.directory, "codex"),
       prepareListen: async () => { throw new Error("Unit tests must not listen"); },
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
-      publishLink: async () => { throw new Error("Harness tests must not publish a Pi package"); },
       watchParent: onGone => {
         const watcher = { gone: onGone, stopped: false };
         this.parentWatchers.push(watcher);

@@ -13,7 +13,7 @@ const runtime: CliRuntime = {
     dataDirectory: () => { throw new Error("install claude must not use the data directory"); },
     socketAddress: () => "memory://comms", binaryName: () => "comms", processExecutable: async () => undefined,
     codexHome: () => { throw new Error("install claude must not read Codex's config"); },
-    prepareListen: refuse("listen"), restrictAccess: refuse("change socket permissions"), publishLink: refuse("publish a Pi package"),
+    prepareListen: refuse("listen"), restrictAccess: refuse("change socket permissions"),
     watchParent: () => () => {},
   },
 };

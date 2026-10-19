@@ -36,7 +36,6 @@ function runtime(): CliRuntime {
       prepareListen: async () => { throw new Error("Unit tests must not listen"); },
       restrictAccess: async () => { throw new Error("Unit tests must not change socket permissions"); },
       watchParent: () => () => {},
-      publishLink: async () => { throw new Error("Codex setup must not publish a Pi package"); },
     },
   };
 }
