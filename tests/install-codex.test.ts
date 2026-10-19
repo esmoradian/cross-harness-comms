@@ -9,7 +9,8 @@ import { runCli, type CliRuntime } from "@cross-harness-comms/core/cli";
 // Every test uses a temporary CODEX_HOME, through both the platform and the environment, so the real
 // ~/.codex is never read or written.
 
-const HEADER = '[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]';
+// Keyed on the published plugin; a local build's `@comms-local` approval is declared elsewhere.
+const HEADER = '[plugins."cross-harness-comms@comms".mcp_servers.comms.tools.comms_send]';
 const SECTION = `${HEADER}\napproval_mode = "approve"`;
 // The published install, which `comms install codex` prints, each command on a line of its own, before it offers the standing approval.
 const PUBLISHED = ["codex plugin marketplace add esmoradian/cross-harness-comms --ref release", "codex plugin add cross-harness-comms@comms"];
@@ -54,7 +55,7 @@ const APPENDED = new RegExp(`^# [^\\n]+\\n${HEADER.replace(/[.*+?^${}()|[\]\\]/g
 
 function approval(text: string): unknown {
   const parsed = Bun.TOML.parse(text) as { plugins?: Record<string, { mcp_servers?: { comms?: { tools?: { comms_send?: { approval_mode?: unknown } } } } }> };
-  return parsed.plugins?.["cross-harness-comms@comms-local"]?.mcp_servers?.comms?.tools?.comms_send?.approval_mode;
+  return parsed.plugins?.["cross-harness-comms@comms"]?.mcp_servers?.comms?.tools?.comms_send?.approval_mode;
 }
 
 test("install codex: prints the published install commands, then offers the reply approval section and --allow-replies, changing nothing", async () => {
@@ -64,8 +65,8 @@ test("install codex: prints the published install commands, then offers the repl
   const [marketplace, plugin] = PUBLISHED.map(command => lines.indexOf(command));
   expect(marketplace).toBeGreaterThanOrEqual(0);
   expect(plugin).toBeGreaterThan(marketplace!);
-  // The dist-based local instructions are gone.
-  expect(lines.slice(0, plugin! + 1).join("\n")).not.toMatch(/\bdist\b|comms-local/);
+  // The dist-based local instructions are gone, and the approval names the published plugin.
+  expect(result.stdout).not.toMatch(/\bdist\b|comms-local/);
   const offer = lines.slice(plugin! + 1).join("\n");
   expect(offer).toContain(SECTION + "\n");
   expect(offer).toContain("comms install codex --allow-replies");
@@ -111,4 +112,15 @@ test("install codex --allow-replies: a config.toml that already has the section 
   expect(result.exitCode).toBe(0);
   expect(readFileSync(config(), "utf8")).toBe(original);
   expect(result.stdout).toMatch(/already/i);
+});
+
+test("install codex --allow-replies: a config.toml with only the local build's approval still gets the published one", async () => {
+  const local = '[plugins."cross-harness-comms@comms-local".mcp_servers.comms.tools.comms_send]\napproval_mode = "approve"\n';
+  writeFileSync(config(), local);
+  const result = await install("--allow-replies");
+  expect(result.exitCode).toBe(0);
+  const text = readFileSync(config(), "utf8");
+  expect(text.startsWith(local)).toBe(true);
+  expect(text.slice(local.length).replace(/^\n+/, "")).toMatch(APPENDED);
+  expect(approval(text)).toBe("approve");
 });

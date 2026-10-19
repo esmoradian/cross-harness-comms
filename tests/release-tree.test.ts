@@ -123,3 +123,12 @@ test("release tree: refuses an output directory that already contains files", as
   expect(result.stdout).toStartWith("rejected: ");
   expect(readdirSync(occupied)).toEqual(["keep.txt"]);
 });
+
+test("release tree: accepts an existing empty output directory", async () => {
+  const empty = join(root, "empty");
+  mkdirSync(empty);
+  const result = await writeTree(empty);
+  expect(result.exitCode, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe("written");
+  expect(files(empty)).toEqual(files(tree));
+});
