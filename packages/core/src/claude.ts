@@ -17,7 +17,7 @@ const replyPath = (directory: string, agent: string) =>
 // from a reply socket per non-Claude agent, falling back to `deliver` packets.
 export function claudeRoute(ctx: Context, nativeAckMs: number) {
   const { store, live } = ctx;
-  const replyServers = new Map<string, Server>();
+  const replyServers = new Map<string, { server: Server; agent: string }>();
   // One native line is in flight per Claude session; the next is written after its ACK.
   const deliver = (connection: Connection, message: Message) => {
     if (connection.inflight) return;
@@ -63,9 +63,9 @@ export function claudeRoute(ctx: Context, nativeAckMs: number) {
       if (agent.harness === "claude" || replyServers.has(path)) continue;
       rmSync(path, { force: true });
       const server = createServer(socket => readReplies(socket, agent.id));
-      server.on("error", () => { if (replyServers.get(path) === server) replyServers.delete(path); });
+      server.on("error", () => { if (replyServers.get(path)?.server === server) replyServers.delete(path); });
       server.listen(path);
-      replyServers.set(path, server);
+      replyServers.set(path, { server, agent: agent.id });
     }
   };
   const readReplies = (socket: Socket, recipient: string) => {
@@ -103,8 +103,12 @@ export function claudeRoute(ctx: Context, nativeAckMs: number) {
     return agent => directory && agent.harness !== "claude" ? { ...agent, claude_address: `uds:${replyPath(directory, agent.id)}` } : agent;
   };
   const close = () => {
-    for (const server of replyServers.values()) server.close();
+    for (const { server } of replyServers.values()) server.close();
     replyServers.clear();
   };
-  return { deliver, ack, openReplySockets, addressing, close };
+  // Removed agents lose their reply sockets; closing one also unlinks its path.
+  const forget = (agents: Set<string>) => {
+    for (const [path, { server, agent }] of replyServers) if (agents.has(agent)) { server.close(); replyServers.delete(path); }
+  };
+  return { deliver, ack, openReplySockets, addressing, close, forget };
 }

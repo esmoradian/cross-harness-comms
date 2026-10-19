@@ -34,6 +34,10 @@ export function openStore(path: string) {
   const agentColumns = db.query("PRAGMA table_info(agents)").all() as { name: string }[];
   if (!agentColumns.some(column => column.name === "name_chosen")) db.exec("ALTER TABLE agents ADD COLUMN name_chosen INTEGER NOT NULL DEFAULT 0");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS agent_token ON agents(token_hash)");
+  // Retention: the sweep finds old agents and their undelivered mail by index, and holds removed names.
+  db.exec(`CREATE INDEX IF NOT EXISTS agent_last_seen ON agents(last_seen);
+    CREATE INDEX IF NOT EXISTS outbox ON messages(sender, state);
+    CREATE TABLE IF NOT EXISTS released_names (name TEXT PRIMARY KEY, released_at TEXT NOT NULL);`);
   const agentFields = "SELECT id, harness, session_key, host, name, cwd, last_seen FROM agents";
   return {
     db,

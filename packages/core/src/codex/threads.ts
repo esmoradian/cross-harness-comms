@@ -152,5 +152,8 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
     await iterator?.return?.();
     await task;
   };
-  return { sender, deliver, start, end, close, unloadDelaySecs: () => unloadDelaySecs };
+  return { sender, deliver, start, end, close, unloadDelaySecs: () => unloadDelaySecs,
+    // A daemon-owned thread online when the core stopped counts as online until the daemon reports on it.
+    onlineBeforeStart: (agent: string) => onlineBeforeStart.has(agent),
+    forget: (agents: Set<string>) => { for (const agent of agents) chains.delete(agent); } };
 }

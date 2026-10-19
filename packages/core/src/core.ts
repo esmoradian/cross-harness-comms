@@ -103,12 +103,49 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
       if (!ctx.closed) store.seen(connection.agent, ctx.now());
     }
   };
+  // Retention (HANDOFF-RETENTION): old offline agents are removed, and their names are held, for 30 days each.
+  const retained = () => new Date(ctx.now() - 30 * 86_400_000).toISOString();
+  const released = (name: string) => !!db.query("SELECT 1 FROM released_names WHERE name = ? AND released_at >= ?").get(name, retained());
+  const refuseReleased = (name: string) => {
+    if (released(name)) throw failure("NAME_TAKEN", `${name} was released recently by a removed agent and is held for 30 days`);
+  };
   // The first free `<harness>-<folder>` name, with `-2`, `-3` suffixes.
   const generatedName = (harness: string, cwd: string) => {
     const base = `${harness}-${basename(cwd) || "session"}`.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64);
     let name = base, suffix = 1;
-    while (store.agentNamed(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
+    while (store.agentNamed(name) || released(name)) { const tail = `-${++suffix}`; name = base.slice(0, 64 - tail.length) + tail; }
     return name;
+  };
+  // Removes each offline agent with a generated name last seen more than 30 days ago, unless mail it sent still
+  // waits for an agent that stays, with every message to or from it and its Codex rows, and tombstones its name.
+  const sweep = () => {
+    const cutoff = retained();
+    db.query("DELETE FROM released_names WHERE released_at < ?").run(cutoff);
+    const removed = new Set((db.query(`SELECT id FROM agents WHERE last_seen < ? AND name_chosen = 0
+      AND id NOT IN (SELECT agent FROM codex_threads)`).all(cutoff) as { id: string }[])
+      .map(row => row.id).filter(id => !live.has(id) && !codex.onlineBeforeStart(id)));
+    if (!removed.size) return;
+    const waiting = db.query("SELECT sender, recipient FROM messages WHERE state != 'acked' AND sender IN (SELECT value FROM json_each(?))")
+      .all(JSON.stringify([...removed])) as { sender: string; recipient: string }[];
+    // An agent kept for its mail keeps the agents whose mail waits for it in turn.
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const { sender, recipient } of waiting) if (removed.has(sender) && !removed.has(recipient)) { removed.delete(sender); changed = true; }
+    }
+    if (!removed.size) return;
+    const ids = "(SELECT value FROM json_each(?1))", mail = `sender IN ${ids} OR recipient IN ${ids}`;
+    // Foreign keys have no cascades, so references go before the rows they point at.
+    db.transaction((list: string) => {
+      db.query(`UPDATE messages SET reply_to = NULL WHERE reply_to IN (SELECT id FROM messages WHERE ${mail})`).run(list);
+      db.query(`DELETE FROM messages WHERE ${mail}`).run(list);
+      db.query(`DELETE FROM codex_threads WHERE agent IN ${ids}`).run(list);
+      db.query(`DELETE FROM codex_lifecycle WHERE agent IN ${ids}`).run(list);
+      db.query(`INSERT OR REPLACE INTO released_names SELECT name, ?2 FROM agents WHERE id IN ${ids}`).run(list, new Date(ctx.now()).toISOString());
+      db.query(`DELETE FROM agents WHERE id IN ${ids}`).run(list);
+    })(JSON.stringify([...removed]));
+    for (const id of removed) activity.delete(id);
+    claude.forget(removed);
+    codex.forget(removed);
   };
   // An offline agent gives up its name for a generated one; its mail stays with it.
   const release = (agent: AgentRow) =>
@@ -161,6 +198,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         ctx.touch(agent.id);
         return present({ ...agent, ...session, last_seen: now }, true);
       }
+      // A new agent runs the sweep first, so a name it releases is not generated again.
+      sweep();
       const name = chosen ?? generatedName(session.harness, session.cwd);
       const id = messageId(Date.now());
       db.query("INSERT INTO agents (id, harness, session_key, host, name, cwd, last_seen, token_hash, name_chosen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -307,6 +346,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         const agent = resolveAddress(string(params.address), agents()), name = validName(params.name);
         const holder = store.agentNamed(name);
         if (holder && holder.id !== agent.id) throw failure("NAME_TAKEN");
+        refuseReleased(name);
         db.query("UPDATE agents SET name = ? WHERE id = ?").run(name, agent.id);
         return { ...agent, name };
       }
@@ -316,6 +356,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
         const taken = holder && holder.id !== id ? holder : undefined;
         if (taken && online(taken.id))
           throw failure("NAME_TAKEN", `${name} is taken by an online ${taken.harness} agent in ${basename(taken.cwd) || taken.cwd}`);
+        refuseReleased(name);
         db.transaction(() => {
           if (taken) release(taken);
           db.query("UPDATE agents SET name = ?, name_chosen = 1 WHERE id = ?").run(name, id);
@@ -337,6 +378,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     }
   };
   const codex = codexThreads(ctx, options.run, options.codexEvents);
+  sweep();
   return {
     attach(stream) {
       if (ctx.closed) { stream.destroy(); return; }
@@ -382,6 +424,8 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     },
     async close() {
       if (ctx.closed) return;
+      // Agents online until now were seen now, so the next start's sweep does not count the downtime against them.
+      for (const agent of live.keys()) store.seen(agent, ctx.now());
       ctx.closed = true;
       await codex.close();
       claude.close();
