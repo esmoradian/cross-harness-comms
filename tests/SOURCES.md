@@ -231,6 +231,20 @@ These are specified in `names.test.ts`.
 - The `name` refusal for an online holder is `NAME_TAKEN` with a message containing the holder's harness and the last part of its working directory; the exact wording is left to the implementation.
 - The migration test drops `agents.name_chosen` from a current database to stand in for one from before chosen names, so the column must stay droppable (not part of an index, key, or check constraint).
 
+## Retention (HANDOFF-RETENTION)
+
+Source: the decisions in `internal/HANDOFF-RETENTION.md`, from `internal/LIST-AND-RETENTION.md` and `internal/NAMING-DESIGN.md`.
+These are specified in `retention.test.ts`; no fake or rig changed.
+
+- Time comes only from the core's injected `now`; agents age by `leave` at one reading and a later reading, never by waiting.
+- Boundaries are one minute either side: `last_seen` 30 days and a minute old is removed, 30 days less a minute stays, and the same for a tombstone's age.
+- Removal is checked in the database (`agents`, `messages`, `codex_threads`, `codex_lifecycle`, `released_names`), as the token and name tests read it, and also in `list`.
+- A sweep is triggered by `rig.restart()` for core start, and by a new wire session or a new Codex thread's SessionStart hook for registration.
+- The tombstone refusal is `NAME_TAKEN` with a message containing `released`; the rest of the wording is left to the implementation.
+- An agent online when the core stopped counts as online for the next start's sweep: a Pi session on a connection, whose stored `last_seen` is still its registration time, and a daemon-owned Codex thread, which stays online until the first snapshot after the start omits it (the `stale:` tests).
+- The pre-change database is written by hand with the 0.1.24 schema from `packages/core/src/store.ts` at `4965387`, rather than by dropping a table from a current one, so any index the change adds is also missing.
+- The reply socket test reads the removed agent's `claude_address` before the sweep and then checks that nothing accepts connections on that path.
+
 ## Detach
 
 `tests/detach.test.ts` uses the real client and core over the rig's in-memory streams.
