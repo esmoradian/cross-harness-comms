@@ -258,7 +258,7 @@ test("codex lifecycle: a thread that cannot be steered gets the message through 
   }, { codexSteer: async () => { steers++; return false; } });
 });
 
-test("codex lifecycle: an uncertain steer is not queued again, so the message cannot arrive twice", async () => {
+test("codex lifecycle: does not immediately fall back to queue after an uncertain steer", async () => {
   await withEvents(async (rig, events) => {
     const { fake, agent } = await started(rig, events);
     await status(events, fake.threadId, "active");
@@ -269,4 +269,27 @@ test("codex lifecycle: an uncertain steer is not queued again, so the message ca
     expect(rig.rows()[0]).toMatchObject({ id: message!.id, state: "delivered" });
     expect(fake.commands).toHaveLength(0);
   }, { codexSteer: async () => { throw new Error("Codex daemon request timed out: turn/steer"); } });
+});
+
+test("codex lifecycle: a steer accepted while the core shuts down stays acked and is not replayed after restart", async () => {
+  let steers = 0, accept!: (accepted: boolean) => void;
+  await withEvents(async (rig, events) => {
+    const { fake, agent } = await started(rig, events);
+    await status(events, fake.threadId, "active");
+    const sender = await rig.harness("pi");
+    await sender.send(`comms:${agent.name}`, "accepted during shutdown");
+    const [message] = rig.rows();
+    await eventually(() => steers, count => expect(count).toBe(1));
+    const restarting = rig.restart();
+    await Bun.sleep(1);
+    accept(true);
+    await restarting;
+    expect(rig.rows().find(row => row.id === message!.id)?.state).toBe("acked");
+    // Deliveries to a thread run in order, so a replay of the first message would steer before this one.
+    const again = await rig.harness("pi");
+    await again.send(`comms:${agent.name}`, "after restart");
+    await rig.state(rig.rows().at(-1)!.id, "acked");
+    expect(steers).toBe(2);
+    expect(fake.commands).toHaveLength(0);
+  }, { codexSteer: () => ++steers === 1 ? new Promise<boolean>(resolve => { accept = resolve; }) : Promise.resolve(true) });
 });
