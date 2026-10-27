@@ -7,7 +7,7 @@ import { DEFAULT_POLICY, NAME_RULE, RELEASE_VERSION, convert, failure, negotiate
   compareVersions, messageId, type Agent, type Delivery, type Message, type SessionRegistration, type VersionPolicy, type WirePacket, type RpcError } from "@cross-harness-comms/protocol";
 import { hash, openStore, type AgentRow, type Store } from "./store.ts";
 import { claudeRoute } from "./claude.ts";
-import { codexThreads, type Run } from "./codex/threads.ts";
+import { codexThreads, type Run, type CodexSteer } from "./codex/threads.ts";
 
 export interface Core {
   attach(stream: Duplex): void;
@@ -68,7 +68,7 @@ function registration(value: unknown): SessionRegistration {
 }
 
 export function createCore(options: { databasePath: string; protocol?: VersionPolicy; onShutdown?: () => void; pingTimeoutMs?: number; run?: Run;
-  codexEvents?: AsyncIterable<CodexEvent>; nativeAckMs?: number; now?: () => number }): Core {
+  codexEvents?: AsyncIterable<CodexEvent>; codexSteer?: CodexSteer; nativeAckMs?: number; now?: () => number }): Core {
   const policy = options.protocol ?? DEFAULT_POLICY;
   const store = openStore(options.databasePath), { db } = store;
   const pingTimeoutMs = options.pingTimeoutMs ?? 2000;
@@ -390,7 +390,7 @@ export function createCore(options: { databasePath: string; protocol?: VersionPo
     db.query("UPDATE agents SET last_seen = ? WHERE id IN (SELECT agent FROM connected_sessions)").run(new Date(ctx.now()).toISOString());
     db.exec("DELETE FROM connected_sessions");
   })();
-  const codex = codexThreads(ctx, options.run, options.codexEvents);
+  const codex = codexThreads(ctx, options.run, options.codexEvents, options.codexSteer);
   sweep();
   return {
     attach(stream) {

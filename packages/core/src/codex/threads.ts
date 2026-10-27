@@ -3,6 +3,8 @@ import { failure, formatMessage, type Agent, type Message, type SessionRegistrat
 import type { CodexEvent, CodexRuntimeState, CodexThread } from "./events.ts";
 import type { Context } from "../core.ts";
 
+export type CodexSteer = (threadId: string, text: string, messageId: string) => Promise<boolean>;
+
 export type Run = (argv: readonly string[]) => Promise<{ exitCode: number; stderr?: string }>;
 
 // shortcut: no timeout on `codex queue`; a hung command stalls only that thread's deliveries.
@@ -14,10 +16,11 @@ const spawn: Run = async argv => {
 type Lifecycle = { executable: string; runtime_state: CodexRuntimeState; ended: number; ended_at: number | null; daemon_owned: number };
 
 // Codex threads: their start and end from hooks and from the app-server daemon's events,
-// and delivery through `codex queue`.
-export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncIterable<CodexEvent>) {
+// and delivery through guarded active-turn steering, with `codex queue` for idle sessions.
+export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncIterable<CodexEvent>, steer?: CodexSteer) {
   const { store } = ctx, { db } = store;
   const chains = new Map<string, Promise<void>>();
+  const steering = new Set<Promise<boolean>>();
   // The daemon's `thread_unload_delay_secs` from its latest connection's snapshot, or Codex's default 1800.
   let unloadDelaySecs = 1800;
   const lifecycle = (agent: string) => db.query("SELECT executable, runtime_state, ended, ended_at, daemon_owned FROM codex_lifecycle WHERE agent = ?")
@@ -42,9 +45,29 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
       if (!thread || !current || current.state === "acked") return;
       store.markDelivered(message.id);
       const text = formatMessage(ctx.delivery({ ...message, state: "delivered" }), "codex");
+      if (steer) {
+        let attempt: Promise<boolean> | undefined;
+        try {
+          attempt = steer(thread.session_key, text, message.id).then(accepted => {
+            // close() drains these bounded RPCs before the store closes, so an
+            // accepted input is recorded even when shutdown has started.
+            if (accepted) store.markAcked(message.id);
+            return accepted;
+          });
+          steering.add(attempt);
+          if (await attempt || ctx.closed) return;
+        } catch {
+          // The mutation may have succeeded before the response was lost. Keep
+          // mail for recovery; do not immediately send it again via the queue.
+          if (!ctx.closed) offline(message.recipient);
+          return;
+        } finally { if (attempt) steering.delete(attempt); }
+      }
+      if (ctx.closed) return;
       const result = await run([thread.executable, "queue", "--thread", thread.session_key, "--message", text]).catch(() => ({ exitCode: 1 }));
       if (ctx.closed) return;
-      // Codex accepting the queued message is the ACK; a refusal means the thread is gone.
+      // ACK means harness acceptance, not model processing or a human read receipt.
+      // Idle/non-steerable sessions retain the durable queue; refusal marks them offline.
       if (result.exitCode === 0) store.markAcked(message.id);
       else offline(message.recipient);
     });
@@ -153,6 +176,9 @@ export function codexThreads(ctx: Context, run: Run = spawn, events?: AsyncItera
   const close = async () => {
     await iterator?.return?.();
     await task;
+    // Do not wait for unbounded queue subprocesses. Steering has transport
+    // deadlines and must record successful receipts before SQLite closes.
+    await Promise.allSettled([...steering]);
   };
   return { sender, deliver, start, end, close, unloadDelaySecs: () => unloadDelaySecs,
     // A daemon-owned thread online when the core stopped counts as online until the daemon reports on it.

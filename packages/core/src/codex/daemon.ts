@@ -8,6 +8,11 @@ import type { Platform } from "../platform/platform.ts";
 
 interface Notification { method: string; params?: unknown; emittedAtMs?: number }
 
+// A server rejection is distinguishable from a lost response after a mutation.
+class DaemonRpcError extends Error {
+  constructor(readonly code: number, message: string) { super(message); }
+}
+
 // Codex's local app-server protocol is JSON-RPC over a Unix WebSocket.
 function frame(opcode: number, payload: Buffer): Buffer {
   const mask = randomBytes(4), length = payload.length;
@@ -93,13 +98,13 @@ async function open(address: string, timeoutMs: number, signal?: AbortSignal) {
         message.push(payload); messageBytes += payload.length;
         if (!fin) continue;
         const packet = JSON.parse(Buffer.concat(message).toString()) as {
-          id?: number; method?: string; params?: unknown; emittedAtMs?: number; result?: unknown; error?: { message: string };
+          id?: number; method?: string; params?: unknown; emittedAtMs?: number; result?: unknown; error?: { code: number; message: string };
         };
         message = []; messageBytes = 0;
         const request = typeof packet.id === "number" ? pending.get(packet.id) : undefined;
         if (request) {
           pending.delete(packet.id!); clearTimeout(request.timer);
-          if (packet.error) request.reject(new Error(packet.error.message)); else request.resolve(packet.result);
+          if (packet.error) request.reject(new DaemonRpcError(packet.error.code, packet.error.message)); else request.resolve(packet.result);
         } else if (typeof packet.method === "string") notifications.push(packet as Notification);
       }
     } catch (error) { fail(error instanceof Error ? error : new Error("Invalid Codex daemon packet")); }
@@ -114,10 +119,10 @@ async function open(address: string, timeoutMs: number, signal?: AbortSignal) {
     socket.write(frame(1, Buffer.from(JSON.stringify(value))));
   };
   return {
-    request: <T>(method: string, params: unknown) => new Promise<T>((resolve, reject) => {
+    request: <T>(method: string, params: unknown, requestTimeoutMs = timeoutMs) => new Promise<T>((resolve, reject) => {
       if (ended) { reject(new Error("Codex daemon connection is closed")); return; }
       const id = ++sequence;
-      const timer = setTimeout(() => fail(new Error(`Codex daemon request timed out: ${method}`)), timeoutMs);
+      const timer = setTimeout(() => fail(new Error(`Codex daemon request timed out: ${method}`)), requestTimeoutMs);
       pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       try { send({ jsonrpc: "2.0", id, method, params }); } catch (error) { fail(error as Error); }
     }),
@@ -144,6 +149,33 @@ async function initialize(client: DaemonClient) {
     capabilities: { experimentalApi: true } });
   client.notify("initialized");
 }
+// One short-lived connection per delivery keeps steering independent of presence
+// discovery and its reconnects. Only read metadata until the guarded mutation.
+// false means no input was accepted and queueing is safe. A lost mutation response
+// throws: immediately queueing then could deliver the same message twice.
+export async function steerCodexThread(platform: Platform, threadId: string, text: string, messageId: string,
+  options: { timeoutMs?: number; steerTimeoutMs?: number; signal?: AbortSignal } = {}): Promise<boolean> {
+  let client: DaemonClient | undefined;
+  let steering = false;
+  try {
+    client = await open(join(platform.codexHome(), "app-server-control", "app-server-control.sock"), options.timeoutMs ?? 2000, options.signal);
+    await initialize(client);
+    const page = await client.request<{ data: { id: string; status: string }[] }>("thread/turns/list",
+      { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" });
+    const turn = page.data.find(turn => turn.status === "inProgress" && typeof turn.id === "string");
+    if (!turn) return false;
+    steering = true;
+    const accepted = await client.request<{ turnId: string }>("turn/steer", {
+      threadId, expectedTurnId: turn.id, clientUserMessageId: messageId, input: [{ type: "text", text }],
+    }, options.steerTimeoutMs ?? 10000);
+    if (accepted.turnId !== turn.id) throw new Error("Codex returned an unexpected steering receipt");
+    return true;
+  } catch (error) {
+    if (!steering || (error instanceof DaemonRpcError && [-32600, -32601, -32602].includes(error.code))) return false;
+    throw error;
+  } finally { client?.close(); }
+}
+
 // A thread can disappear between listing or announcing and reading it.
 async function readThread(client: DaemonClient, id: string): Promise<CodexThread | undefined> {
   const response = await client.request<{ thread: unknown }>("thread/read", { threadId: id }).catch(() => undefined);

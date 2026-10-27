@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { createClient } from "@cross-harness-comms/client";
 import { RELEASE_VERSION, VERSION_RANGE, compareVersions } from "@cross-harness-comms/protocol";
 import { createCore } from "./core.ts";
-import { watchCodexDaemon } from "./codex/daemon.ts";
+import { watchCodexDaemon, steerCodexThread } from "./codex/daemon.ts";
 import type { CommandIO } from "@cross-harness-comms/client";
 import type { CliRuntime } from "./cli.ts";
 
@@ -113,7 +113,8 @@ export async function serve(io: CommandIO, runtime: CliRuntime): Promise<number>
   io.signal.addEventListener("abort", abort, { once: true });
   try {
     await runtime.platform.prepareListen();
-    core = createCore({ databasePath: join(path, "comms.sqlite"), onShutdown: stop, codexEvents: watchCodexDaemon(runtime.platform) });
+    core = createCore({ databasePath: join(path, "comms.sqlite"), onShutdown: stop, codexEvents: watchCodexDaemon(runtime.platform),
+      codexSteer: (threadId, text, messageId) => steerCodexThread(runtime.platform, threadId, text, messageId) });
     await chmod(join(path, "comms.sqlite"), 0o600);
     server = createServer(stream => core!.attach(stream));
     await new Promise<void>((resolve, reject) => {
