@@ -5,11 +5,12 @@ import type { Platform } from "../../../packages/core/src/platform/platform.ts";
 // `ConfigReadResponse` from `codex app-server generate-ts` 0.163.0, for a daemon whose config sets no unload delay.
 export const noDelay = () => ({ config: { model: null }, origins: {}, layers: null });
 
-export interface DaemonRequest { id?: number; method: string; params?: { cursor?: string; threadId?: string } }
+export interface DaemonRequest { id?: number; method: string; params?: { cursor?: string; threadId?: string; expectedTurnId?: string } & Record<string, unknown> }
 
 // A stand-in for Codex's app-server daemon: JSON-RPC over a WebSocket on a Unix socket, owned by pid 4242, `/daemon/codex`.
 // `answer` gives each request's result after `initialize`, and may send notifications ahead of it.
-// `config` answers `config/read` instead, by default with no `thread_unload_delay_secs` set; a throw answers with a JSON-RPC error.
+// `config` answers `config/read` instead, by default with no `thread_unload_delay_secs` set; a throw from either answers
+// with a JSON-RPC error carrying the thrown `code`, or -32603.
 export function fakeCodexDaemon(answer: (request: DaemonRequest, send: (packet: unknown) => void) => unknown,
   options: { config?: () => unknown } = {}) {
   // Short base path: macOS caps Unix socket paths at 104 bytes.
@@ -36,7 +37,8 @@ export function fakeCodexDaemon(answer: (request: DaemonRequest, send: (packet: 
           catch (error) { send({ id: request.id, error: { code: -32603, message: (error as Error).message } }); }
           return;
         }
-        send({ id: request.id, result: request.method === "initialize" ? {} : answer(request, send) });
+        try { send({ id: request.id, result: request.method === "initialize" ? {} : answer(request, send) }); }
+        catch (error) { send({ id: request.id, error: { code: (error as { code?: number }).code ?? -32603, message: (error as Error).message } }); }
       },
     },
   });

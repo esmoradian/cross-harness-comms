@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { Agent } from "@cross-harness-comms/protocol";
 import { FakeCodex } from "./support/fakes/codex.ts";
 import { FakeCodexEvents } from "./support/fakes/codex-events.ts";
-import { uuid } from "./support/helpers.ts";
+import { eventually, uuid } from "./support/helpers.ts";
 import { withRig, type Rig } from "./support/rig.ts";
 
 // Tests only: codexEvents is the proposed sequential event input to createCore.
@@ -241,4 +241,32 @@ test("codex lifecycle: a busy thread is steered mid-turn instead of queued for i
     expect(steers).toEqual([{ threadId: fake.threadId, text: expect.stringContaining("steer me mid-turn"), messageId: message!.id }]);
     expect(fake.commands).toHaveLength(0);
   }, { codexSteer: async (threadId, text, messageId) => { steers.push({ threadId, text, messageId }); return true; } });
+});
+
+test("codex lifecycle: a thread that cannot be steered gets the message through the queue exactly once", async () => {
+  let steers = 0;
+  await withEvents(async (rig, events) => {
+    const { fake, agent } = await started(rig, events);
+    await status(events, fake.threadId, "idle");
+    const sender = await rig.harness("pi");
+    await sender.send(`comms:${agent.name}`, "queue me for the next turn");
+    const [message] = rig.rows();
+    await rig.state(message!.id, "acked");
+    expect(steers).toBe(1);
+    expect(fake.commands).toHaveLength(1);
+    expect(fake.commands[0]!.at(-1)).toContain("queue me for the next turn");
+  }, { codexSteer: async () => { steers++; return false; } });
+});
+
+test("codex lifecycle: an uncertain steer is not queued again, so the message cannot arrive twice", async () => {
+  await withEvents(async (rig, events) => {
+    const { fake, agent } = await started(rig, events);
+    await status(events, fake.threadId, "active");
+    const sender = await rig.harness("pi");
+    await sender.send(`comms:${agent.name}`, "maybe steered");
+    const [message] = rig.rows();
+    await eventually(() => rig.agent("codex", fake.threadId), row => expect(row.online).toBe(false));
+    expect(rig.rows()[0]).toMatchObject({ id: message!.id, state: "delivered" });
+    expect(fake.commands).toHaveLength(0);
+  }, { codexSteer: async () => { throw new Error("Codex daemon request timed out: turn/steer"); } });
 });
