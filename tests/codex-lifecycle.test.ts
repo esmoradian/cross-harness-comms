@@ -285,6 +285,9 @@ test("codex lifecycle: a steer accepted while the core shuts down stays acked an
     accept(true);
     await restarting;
     expect(rig.rows().find(row => row.id === message!.id)?.state).toBe("acked");
+    // The restarted core finds the thread again from the daemon's snapshot, which drains anything still pending.
+    await events.publish({ method: "comms/daemon-snapshot", executable: "/daemon/codex",
+      params: { threads: [{ id: fake.threadId, cwd: fake.cwd }] } });
     // Deliveries to a thread run in order, so a replay of the first message would steer before this one.
     const again = await rig.harness("pi");
     await again.send(`comms:${agent.name}`, "after restart");
