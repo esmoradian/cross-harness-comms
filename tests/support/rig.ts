@@ -64,6 +64,8 @@ export class Rig {
     pingTimeoutMs?: number; nativeAckMs?: number;
     now?: () => number;
     codexEvents?: AsyncIterable<CodexEvent>;
+    // Steers the thread's active turn: true accepted, false unavailable so the core queues instead.
+    codexSteer?: (threadId: string, text: string, messageId: string) => Promise<boolean>;
   } = {}) {}
   // Real Claude names an inbox after the session's PID; these never start with 9.
   inboxPath(): string { return join(this.socketDirectory, `${20000 + this.inboxCount++}.sock`); }

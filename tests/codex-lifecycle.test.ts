@@ -7,12 +7,12 @@ import { withRig, type Rig } from "./support/rig.ts";
 
 // Tests only: codexEvents is the proposed sequential event input to createCore.
 // No new protocol method, daemon polling, real sockets, or harness processes.
-async function withEvents(run: (rig: Rig, events: FakeCodexEvents) => Promise<void>) {
+async function withEvents(run: (rig: Rig, events: FakeCodexEvents) => Promise<void>, options: Rig["coreOptions"] = {}) {
   const events = new FakeCodexEvents();
   await withRig(async rig => {
     try { await run(rig, events); }
     finally { events.close(); }
-  }, undefined, { codexEvents: events });
+  }, undefined, { ...options, codexEvents: events });
 }
 
 async function started(rig: Rig, events: FakeCodexEvents) {
@@ -227,4 +227,18 @@ test("codex lifecycle: buffered statuses emitted before SessionEnd cannot masque
       await sameSession(rig, agent, true);
     } finally { events.close(); }
   }, undefined, { codexEvents: events, now: () => endedAt });
+});
+
+test("codex lifecycle: a busy thread is steered mid-turn instead of queued for its next turn", async () => {
+  const steers: { threadId: string; text: string; messageId: string }[] = [];
+  await withEvents(async (rig, events) => {
+    const { fake, agent } = await started(rig, events);
+    await status(events, fake.threadId, "active");
+    const sender = await rig.harness("pi");
+    await sender.send(`comms:${agent.name}`, "steer me mid-turn");
+    const [message] = rig.rows();
+    await rig.state(message!.id, "acked");
+    expect(steers).toEqual([{ threadId: fake.threadId, text: expect.stringContaining("steer me mid-turn"), messageId: message!.id }]);
+    expect(fake.commands).toHaveLength(0);
+  }, { codexSteer: async (threadId, text, messageId) => { steers.push({ threadId, text, messageId }); return true; } });
 });
